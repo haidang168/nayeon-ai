@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+*.msi
+test_*.mjs
+test-*.ts
