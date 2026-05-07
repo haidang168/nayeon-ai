@@ -1,0 +1,59 @@
+[
+  {
+    "id": "list_b1_1",
+    "level": "B1",
+    "title": "Annonce à la gare (SNCF)",
+    "audioUrl": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+    "transcript": "Votre attention s'il vous plaît. Le train TGV numéro 8540 à destination de Paris, départ initialement prévu à 14h30, partira avec un retard d'environ 20 minutes. Ce retard est dû à des problèmes techniques sur la voie. Nous vous prions de nous excuser pour ce désagrément. Les voyageurs sont invités à patienter sur le quai numéro 4.",
+    "questions": [
+      {
+        "id": "q1",
+        "text": "Quelle est la destination du train ?",
+        "options": [
+          "Marseille",
+          "Lyon",
+          "Paris",
+          "Bordeaux"
+        ],
+        "correctAnswer": 2,
+        "explanation": "L'annonce précise : 'à destination de Paris'."
+      },
+      {
+        "id": "q2",
+        "text": "Combien de temps de retard le train a-t-il ?",
+        "options": [
+          "10 minutes",
+          "20 minutes",
+          "30 minutes",
+          "1 heure"
+        ],
+        "correctAnswer": 1,
+        "explanation": "L'annonce indique : 'un retard d'environ 20 minutes'."
+      },
+      {
+        "id": "q3",
+        "text": "Quelle est la cause de ce retard ?",
+        "options": [
+          "Un mouvement social (grève)",
+          "Des conditions météorologiques",
+          "Des problèmes techniques",
+          "Un bagage abandonné"
+        ],
+        "correctAnswer": 2,
+        "explanation": "L'annonce mentionne que 'Ce retard est dû à des problèmes techniques'."
+      },
+      {
+        "id": "q4",
+        "text": "Sur quel quai les passagers doivent-ils attendre ?",
+        "options": [
+          "Le quai 1",
+          "Le quai 2",
+          "Le quai 3",
+          "Le quai 4"
+        ],
+        "correctAnswer": 3,
+        "explanation": "L'annonce se termine par : 'patienter sur le quai numéro 4'."
+      }
+    ]
+  }
+]

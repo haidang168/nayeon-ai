@@ -1,0 +1,8 @@
+{
+  "name": "Speaking avec Nayeon",
+  "description": "Ứng dụng học nói tiếng Pháp thông minh với giáo viên AI, đóng vai theo tình huống và flashcard thông minh.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": []
+}

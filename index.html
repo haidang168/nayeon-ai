@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#1a56db" />
+    <meta name="description" content="Nayeon AI - Ứng dụng luyện tiếng Pháp thông minh với AI" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Nayeon AI" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <title>Nayeon AI - Luyện tiếng Pháp</title>
+    <!-- Preconnect to API endpoints for faster first call -->
+    <link rel="preconnect" href="https://api.groq.com" crossorigin />
+    <link rel="dns-prefetch" href="https://api.groq.com" />
+    <link rel="preconnect" href="https://generativelanguage.googleapis.com" crossorigin />
+    <link rel="dns-prefetch" href="https://generativelanguage.googleapis.com" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(() => {});
+        });
+      }
+    </script>
+  </body>
+</html>
+

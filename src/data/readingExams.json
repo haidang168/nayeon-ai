@@ -1,0 +1,58 @@
+[
+  {
+    "id": "read_b1_1",
+    "level": "B1",
+    "title": "Le succès du télétravail en France",
+    "passage": "Depuis quelques années, le télétravail a profondément modifié les habitudes des salariés français. Avant 2020, seulement 10% des employés travaillaient régulièrement à domicile. Aujourd'hui, cette pratique concerne près de 30% des actifs.\n\nLes avantages sont nombreux : moins de temps perdu dans les transports en commun, une meilleure concentration et un équilibre plus sain entre vie professionnelle et vie privée. Sophie, comptable à Lyon, explique : « Je gagne deux heures par jour que je peux consacrer à mes enfants ou à faire du sport. De plus, je suis beaucoup plus efficace car je ne suis pas interrompue par mes collègues ».\n\nCependant, le télétravail présente aussi des inconvénients. Certains salariés souffrent d'isolement social. Le manque de contact informel à la machine à café ou pendant le déjeuner peut freiner la créativité et l'esprit d'équipe. De plus, il est parfois difficile de déconnecter le soir quand le bureau se trouve dans le salon.\n\nPour trouver un équilibre, de nombreuses entreprises ont opté pour un modèle hybride : deux ou trois jours de télétravail par semaine, et le reste du temps au bureau pour maintenir la cohésion des équipes.",
+    "questions": [
+      {
+        "id": "q1",
+        "text": "Quel pourcentage d'actifs français pratique le télétravail aujourd'hui ?",
+        "options": [
+          "10%",
+          "20%",
+          "30%",
+          "50%"
+        ],
+        "correctAnswer": 2,
+        "explanation": "Le texte indique : 'Aujourd'hui, cette pratique concerne près de 30% des actifs.'"
+      },
+      {
+        "id": "q2",
+        "text": "Quel avantage du télétravail n'est PAS mentionné par Sophie ?",
+        "options": [
+          "Moins de fatigue physique",
+          "Plus de temps pour le sport",
+          "Moins d'interruptions par les collègues",
+          "Plus de temps avec ses enfants"
+        ],
+        "correctAnswer": 0,
+        "explanation": "Sophie mentionne le sport, les enfants et le manque d'interruptions. Elle ne parle pas explicitement de la fatigue physique."
+      },
+      {
+        "id": "q3",
+        "text": "Quel est le principal problème lié au télétravail selon le texte ?",
+        "options": [
+          "La baisse de productivité",
+          "Les problèmes techniques",
+          "Le coût de l'électricité",
+          "L'isolement social"
+        ],
+        "correctAnswer": 3,
+        "explanation": "Le texte précise : 'Certains salariés souffrent d'isolement social.'"
+      },
+      {
+        "id": "q4",
+        "text": "Quelle solution les entreprises ont-elles trouvée pour garder l'esprit d'équipe ?",
+        "options": [
+          "Augmenter les salaires",
+          "Adopter un modèle hybride",
+          "Interdire le télétravail",
+          "Organiser plus de réunions en ligne"
+        ],
+        "correctAnswer": 1,
+        "explanation": "Le texte conclut : 'de nombreuses entreprises ont opté pour un modèle hybride [...] pour maintenir la cohésion des équipes.'"
+      }
+    ]
+  }
+]

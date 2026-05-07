@@ -1,0 +1,23 @@
+[
+  {
+    "id": "b1_1",
+    "level": "B1",
+    "title": "Un problème de voisinage",
+    "prompt": "Vous habitez un appartement et depuis quelques semaines, votre voisin du dessus fait beaucoup de bruit (musique, fêtes). Vous lui avez déjà parlé mais rien n'a changé. Écrivez une lettre au syndic de l'immeuble pour expliquer la situation et demander une intervention. (160 mots minimum)",
+    "minWords": 160
+  },
+  {
+    "id": "b2_1",
+    "level": "B2",
+    "title": "Télétravail dans l'entreprise",
+    "prompt": "Vous êtes employé dans une grande entreprise. Vous écrivez au directeur pour proposer la mise en place du télétravail deux jours par semaine. Vous exposez les avantages pour les employés et pour l'entreprise, et vous essayez de le convaincre. (250 mots environ)",
+    "minWords": 250
+  },
+  {
+    "id": "a2_1",
+    "level": "A2",
+    "title": "Invitation à une fête",
+    "prompt": "Vous organisez une petite fête chez vous pour célébrer votre nouvel appartement. Écrivez un courriel à vos amis pour les inviter. Vous leur donnez la date, l'heure et l'adresse. Vous leur demandez aussi d'apporter quelque chose à boire. (60 à 80 mots)",
+    "minWords": 60
+  }
+]
