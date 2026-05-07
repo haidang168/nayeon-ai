@@ -39,22 +39,7 @@ export const QAPractice: React.FC<QAPracticeProps> = ({ playAudio, isSpeaking, d
 
   const voice = useVoiceRecognition((transcript) => {
     setUserAnswer(prev => prev ? prev + ' ' + transcript : transcript);
-  });
-
-  const playFrenchAudio = useCallback((text: string) => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'fr-FR';
-    const voices = window.speechSynthesis.getVoices();
-    const frVoice = voices.find(v => v.lang.startsWith('fr-') && (v.name.includes('Google') || v.name.includes('Premium')));
-    if (frVoice) utterance.voice = frVoice;
-    else {
-      const fallback = voices.find(v => v.lang.startsWith('fr-'));
-      if (fallback) utterance.voice = fallback;
-    }
-    window.speechSynthesis.speak(utterance);
-  }, []);
+  }, 'fr');
 
   const generateQuestion = useCallback(async () => {
     setIsLoadingQuestion(true);
@@ -207,9 +192,10 @@ Return valid JSON only.`
                     </p>
                     <p className="text-lg font-semibold leading-snug">{question.question}</p>
                   </div>
-                  <button onClick={() => playFrenchAudio(question.question)}
-                    className="p-2.5 bg-white/10 rounded-xl hover:bg-white/20 transition-colors active:scale-95 shrink-0">
-                    <Volume2 size={16} />
+                  <button onClick={() => playAudio(question.question)}
+                    disabled={isSpeaking}
+                    className="p-2.5 bg-white/10 rounded-xl hover:bg-white/20 transition-colors active:scale-95 shrink-0 disabled:opacity-50">
+                    {isSpeaking ? <Loader2 size={16} className="animate-spin" /> : <Volume2 size={16} />}
                   </button>
                 </div>
                 {question.hint && (

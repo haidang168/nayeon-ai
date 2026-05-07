@@ -25,7 +25,7 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
   const voice = useVoiceRecognition((transcript) => {
     setShadowText(prev => prev ? prev + ' ' + transcript : transcript);
     d.setShadowingTranscript(transcript);
-  });
+  }, 'fr');
 
   const ytPlayerRef = useRef<YouTubePlayer | null>(null);
   const [isPlayingVideo, setIsPlayingVideo] = useState(false);
@@ -401,6 +401,12 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
               {(isSpeaking || isPlayingVideo) ? <Loader2 size={16} className="animate-spin" /> : <Volume2 size={16} />}
               {(isSpeaking || isPlayingVideo) ? 'Đang phát...' : '▶ Nghe lại'}
             </button>
+            {videoSrcId && (
+              <button onClick={() => playAudio(d.currentSentence!.text, d.isSlowSpeed ? 0.75 : 1.0)} disabled={isSpeaking || isPlayingVideo}
+                className="flex items-center gap-1 px-3 py-2.5 rounded-2xl text-sm font-bold active:scale-95 border bg-white text-blue-500 border-blue-200 hover:bg-blue-50">
+                <Brain size={14} /> Giọng AI
+              </button>
+            )}
             <button onClick={() => {
                 const newSlow = !d.isSlowSpeed;
                 d.setIsSlowSpeed(newSlow);

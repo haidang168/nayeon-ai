@@ -41,7 +41,7 @@ export default function App() {
   const chat = useChat(storage.initialMessages, SCENARIOS[0]);
   const voice = useVoiceRecognition((transcript) => {
     setUserInput(prev => prev ? prev + ' ' + transcript : transcript);
-  });
+  }, 'fr');
 
   useEffect(() => {
     let selectionTimeout: number;

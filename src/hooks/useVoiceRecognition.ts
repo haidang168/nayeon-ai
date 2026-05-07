@@ -32,7 +32,7 @@ function getBestMimeType(): string {
   return '';
 }
 
-export function useVoiceRecognition(onResult: (text: string) => void) {
+export function useVoiceRecognition(onResult: (text: string) => void, language?: string) {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState('');
@@ -100,7 +100,7 @@ export function useVoiceRecognition(onResult: (text: string) => void) {
           const transcription = await groq.audio.transcriptions.create({
             file: audioFile,
             model: 'whisper-large-v3-turbo',
-            // No language lock — let Whisper auto-detect (French + Vietnamese mix)
+            ...(language ? { language } : {}),
             response_format: 'json',
             temperature: 0.0,
           });
