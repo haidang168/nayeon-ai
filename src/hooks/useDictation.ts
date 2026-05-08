@@ -268,16 +268,28 @@ export function useDictation() {
       let initialLessons = cloudData?.dictationLessons;
       let initialSrs = cloudData?.dictationSrs;
 
+      let needsSync = false;
+
       if (!initialLessons) {
         initialLessons = loadSavedLessons();
+        if (initialLessons && initialLessons.length > 0) needsSync = true;
       }
       if (!initialSrs) {
         initialSrs = loadSRSItems();
+        if (initialSrs && initialSrs.length > 0) needsSync = true;
       }
 
       setSavedLessons(initialLessons || []);
       setSrsItems(initialSrs || []);
       setIsLoaded(true);
+
+      // Sync legacy local storage data up to Firebase
+      if (needsSync) {
+        syncDataToCloud({ 
+          dictationLessons: initialLessons || [],
+          dictationSrs: initialSrs || []
+        });
+      }
     };
     initData();
   }, []);

@@ -1,11 +1,17 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+export const config = {
+  runtime: 'edge',
+};
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const videoId = req.query.videoId as string;
-  const lang = (req.query.lang as string) || 'fr';
+export default async function handler(req: Request) {
+  const url = new URL(req.url);
+  const videoId = url.searchParams.get('videoId');
+  const lang = url.searchParams.get('lang') || 'fr';
 
   if (!videoId) {
-    return res.status(400).json({ error: 'Missing videoId parameter' });
+    return new Response(JSON.stringify({ error: 'Missing videoId parameter' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   try {
@@ -20,7 +26,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (!transcript || transcript.length === 0) {
-      return res.status(404).json({ error: 'Video này không có phụ đề. Hãy thử video khác có subtitle.' });
+      return new Response(JSON.stringify({ error: 'Video này không có phụ đề. Hãy thử video khác có subtitle.' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     const segments = transcript.map((seg: any) => ({
@@ -29,15 +38,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       duration: (seg.duration || 0) / 1000,
     })).filter((seg: any) => seg.text.length > 0);
 
-    return res.status(200).json({ segments, language: lang });
+    return new Response(JSON.stringify({ segments, language: lang }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
 
   } catch (err: any) {
     console.error('[YT-API] Error:', err.message);
     const isNoTranscript = err.message?.includes('Transcript') || err.message?.includes('disabled');
-    return res.status(isNoTranscript ? 404 : 500).json({
+    return new Response(JSON.stringify({
       error: isNoTranscript
         ? 'Video này không có phụ đề hoặc transcript bị tắt. Hãy thử video khác.'
         : (err.message || 'Lỗi khi lấy transcript từ YouTube')
+    }), {
+      status: isNoTranscript ? 404 : 500,
+      headers: { 'Content-Type': 'application/json' },
     });
   }
 }

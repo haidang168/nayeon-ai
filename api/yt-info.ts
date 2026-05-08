@@ -1,10 +1,16 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+export const config = {
+  runtime: 'edge',
+};
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const videoId = req.query.videoId as string;
+export default async function handler(req: Request) {
+  const url = new URL(req.url);
+  const videoId = url.searchParams.get('videoId');
 
   if (!videoId) {
-    return res.status(400).json({ error: 'Missing videoId' });
+    return new Response(JSON.stringify({ error: 'Missing videoId' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   try {
@@ -14,17 +20,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (oembedRes.ok) {
       const data = await oembedRes.json();
-      return res.status(200).json({
+      return new Response(JSON.stringify({
         title: data.title || `Video ${videoId}`,
         thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
       });
     }
   } catch {
     // Fall through to default
   }
 
-  return res.status(200).json({
+  return new Response(JSON.stringify({
     title: `YouTube Video (${videoId})`,
     thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+  }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
   });
 }
