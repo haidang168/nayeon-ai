@@ -133,6 +133,7 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
   };
 
   const handleRevealSpeak = () => {
+    voice.stopRecording();
     d.revealAnswer();
     setStep('speak-result');
   };
@@ -158,6 +159,14 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
   };
 
   // ─── BROWSE PHASE ───
+  if (!d.isLoaded) {
+    return (
+      <div className="flex-1 flex items-center justify-center h-full">
+        <Loader2 size={32} className="animate-spin text-brand-primary" />
+      </div>
+    );
+  }
+
   if (d.phase === 'browse' || d.phase === 'import') {
     return (
       <div className="flex-1 flex flex-col h-full overflow-y-auto">
@@ -608,42 +617,38 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
           {/* ─── STEP: SPEAK ─── */}
           {step === 'speak' && (
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
-              <p className="text-center text-sm text-slate-500 font-medium">Bây giờ nói lại câu bạn vừa nghe 🎙️</p>
+              <p className="text-center text-sm text-slate-500 font-medium mb-2">Bây giờ nói lại câu bạn vừa nghe 🎙️</p>
 
-              {/* Mic */}
-              <div className="flex flex-col items-center gap-2">
+              <div className="flex items-start gap-2 sm:gap-3">
                 <button onClick={voice.toggleRecording} disabled={voice.isProcessing}
-                  className={`w-16 h-16 rounded-full flex items-center justify-center active:scale-95 shadow-lg ${
-                    voice.isRecording ? 'bg-red-500 text-white animate-pulse shadow-red-200'
-                    : voice.isProcessing ? 'bg-slate-200 text-slate-400'
-                    : 'bg-[#1a56db] text-white shadow-blue-200'
+                  className={`p-3 sm:p-4 rounded-2xl shadow-lg transition-all active:scale-95 shrink-0 ${
+                    voice.isRecording ? 'bg-red-500 text-white animate-pulse shadow-red-200 scale-105'
+                    : voice.isProcessing ? 'bg-amber-100 text-amber-600 shadow-amber-100'
+                    : 'bg-[#1a56db] text-white shadow-blue-200 hover:bg-blue-700'
                   }`}>
-                  {voice.isProcessing ? <Loader2 size={24} className="animate-spin" /> : voice.isRecording ? <MicOff size={24} /> : <Mic size={24} />}
+                  {voice.isProcessing ? <Loader2 size={20} className="animate-spin sm:w-6 sm:h-6" /> : voice.isRecording ? <MicOff size={20} className="sm:w-6 sm:h-6" /> : <Mic size={20} className="sm:w-6 sm:h-6" />}
                 </button>
-                <p className="text-xs text-slate-400">
-                  {voice.isRecording ? 'Đang ghi... Nhấn để dừng' : voice.isProcessing ? 'Đang nhận dạng...' : 'Nhấn để nói'}
-                </p>
-              </div>
-
-              {/* Transcript */}
-              {(shadowText || voice.interimTranscript || step === 'speak') && (
-                <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-sm">
+                
+                <div className="flex-1 bg-white rounded-2xl border border-slate-200 p-3 shadow-sm focus-within:border-[#1a56db] focus-within:ring-2 focus-within:ring-blue-100 transition-all">
                   <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex justify-between items-center">
                     Bạn đã nói:
                     <span className="text-[10px] font-normal text-slate-300 normal-case">(Có thể sửa lại nếu máy nghe sai)</span>
                   </p>
-                  <div className="relative">
-                    <textarea
-                      value={shadowText + (voice.interimTranscript ? ' ' + voice.interimTranscript : '')}
-                      onChange={(e) => {
-                        setShadowText(e.target.value);
-                        d.setShadowingTranscript(e.target.value);
-                      }}
-                      className="w-full text-base text-slate-700 leading-relaxed resize-none focus:outline-none bg-transparent min-h-[80px]"
-                      placeholder="Ghi âm hoặc gõ lại câu bạn vừa đọc..."
-                    />
-                  </div>
+                  <textarea
+                    value={shadowText}
+                    onChange={(e) => {
+                      setShadowText(e.target.value);
+                      d.setShadowingTranscript(e.target.value);
+                    }}
+                    className="w-full text-base text-slate-700 leading-relaxed resize-none focus:outline-none bg-transparent min-h-[80px]"
+                    placeholder={voice.isRecording ? '🔴 Đang thu âm...' : voice.isProcessing ? '⏳ Đang nhận dạng...' : 'Ghi âm hoặc gõ lại câu bạn vừa đọc...'}
+                  />
                 </div>
+              </div>
+              {voice.isProcessing && (
+                <p className="text-xs text-amber-600 text-center animate-pulse font-medium mt-2">
+                  {voice.interimTranscript || '🎙️ Groq Whisper đang nhận dạng tiếng Pháp...'}
+                </p>
               )}
             </motion.div>
           )}

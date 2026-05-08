@@ -41,7 +41,7 @@ export const QAPractice: React.FC<QAPracticeProps> = ({ playAudio, isSpeaking, d
     setUserAnswer(prev => prev ? prev + ' ' + transcript : transcript);
   }, 'fr');
 
-  const generateQuestion = useCallback(async () => {
+  const generateQuestion = useCallback(async (shouldPlay: boolean = false) => {
     setIsLoadingQuestion(true);
     setFeedback(null);
     setUserAnswer('');
@@ -73,12 +73,15 @@ Return valid JSON only. Make questions diverse and practical for daily life.`
       const parsed = JSON.parse(raw);
       setQuestion(parsed);
       setModelAnswer(null);
+      if (shouldPlay && parsed.question) {
+        setTimeout(() => playAudio(parsed.question), 300);
+      }
     } catch (e) {
       console.error("QA question error", e);
     } finally {
       setIsLoadingQuestion(false);
     }
-  }, [difficulty]);
+  }, [difficulty, playAudio]);
 
   const generateModelAnswer = useCallback(async () => {
     if (!question) return;
@@ -105,6 +108,7 @@ Return valid JSON only. Make questions diverse and practical for daily life.`
 
   const evaluateAnswer = useCallback(async () => {
     if (!question || !userAnswer.trim()) return;
+    voice.stopRecording();
     setIsEvaluating(true);
     try {
       const completion = await groq.chat.completions.create({
@@ -228,31 +232,31 @@ Return valid JSON only.`
               {/* Answer area */}
               {!feedback && (
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
-                  {/* Mic */}
-                  <div className="flex flex-col items-center gap-2">
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Câu trả lời:</p>
+                  <div className="flex items-start gap-2 sm:gap-3">
                     <button onClick={voice.toggleRecording} disabled={voice.isProcessing}
-                      className={`w-16 h-16 rounded-full flex items-center justify-center active:scale-95 shadow-lg ${
-                        voice.isRecording ? 'bg-red-500 text-white animate-pulse shadow-red-200'
-                        : voice.isProcessing ? 'bg-slate-200 text-slate-400'
-                        : 'bg-[#1a56db] text-white shadow-blue-200'
+                      className={`p-3 sm:p-4 rounded-2xl shadow-lg transition-all active:scale-95 shrink-0 ${
+                        voice.isRecording ? 'bg-red-500 text-white animate-pulse shadow-red-200 scale-105'
+                        : voice.isProcessing ? 'bg-amber-100 text-amber-600 shadow-amber-100'
+                        : 'bg-[#1a56db] text-white shadow-blue-200 hover:bg-blue-700'
                       }`}>
-                      {voice.isProcessing ? <Loader2 size={24} className="animate-spin" /> : voice.isRecording ? <MicOff size={24} /> : <Mic size={24} />}
+                      {voice.isProcessing ? <Loader2 size={20} className="animate-spin sm:w-6 sm:h-6" /> : voice.isRecording ? <MicOff size={20} className="sm:w-6 sm:h-6" /> : <Mic size={20} className="sm:w-6 sm:h-6" />}
                     </button>
-                    <p className="text-xs text-slate-400">
-                      {voice.isRecording ? 'Đang ghi... Nhấn để dừng' : voice.isProcessing ? 'Đang nhận dạng...' : 'Nhấn để nói'}
+                    
+                    <div className="flex-1 bg-white rounded-2xl border border-slate-200 p-3 shadow-sm focus-within:border-[#1a56db] focus-within:ring-2 focus-within:ring-blue-100 transition-all">
+                      <textarea
+                        value={userAnswer}
+                        onChange={(e) => setUserAnswer(e.target.value)}
+                        className="w-full text-base text-slate-700 leading-relaxed resize-none focus:outline-none bg-transparent min-h-[80px]"
+                        placeholder={voice.isRecording ? '🔴 Đang thu âm...' : voice.isProcessing ? '⏳ Đang nhận dạng...' : 'Nói hoặc gõ câu trả lời bằng tiếng Pháp...'}
+                      />
+                    </div>
+                  </div>
+                  {voice.isProcessing && (
+                    <p className="text-xs text-amber-600 text-center animate-pulse font-medium mt-2">
+                      {voice.interimTranscript || '🎙️ Groq Whisper đang nhận dạng tiếng Pháp...'}
                     </p>
-                  </div>
-
-                  {/* Transcript */}
-                  <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-sm">
-                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">Câu trả lời:</p>
-                    <textarea
-                      value={userAnswer + (voice.interimTranscript ? ' ' + voice.interimTranscript : '')}
-                      onChange={(e) => setUserAnswer(e.target.value)}
-                      className="w-full text-base text-slate-700 leading-relaxed resize-none focus:outline-none bg-transparent min-h-[80px]"
-                      placeholder="Nói hoặc gõ câu trả lời bằng tiếng Pháp..."
-                    />
-                  </div>
+                  )}
                 </motion.div>
               )}
 
@@ -304,7 +308,7 @@ Return valid JSON only.`
                 className="flex-1 py-3.5 bg-slate-200 text-slate-700 font-bold rounded-2xl text-sm active:scale-95 flex items-center justify-center gap-1.5">
                 <RotateCcw size={14} /> Trả lời lại
               </button>
-              <button onClick={generateQuestion}
+              <button onClick={() => generateQuestion(true)}
                 className="flex-1 py-3.5 bg-green-500 text-white font-bold rounded-2xl text-sm active:scale-95 shadow-md flex items-center justify-center gap-1.5">
                 Câu tiếp <ChevronRight size={15} />
               </button>

@@ -9,6 +9,7 @@ import {
 } from '../lib/youtubeTranscript';
 import { groq } from '../lib/groq';
 import { useStats } from './useStats';
+import { syncDataToCloud, loadDataFromCloud } from '../lib/firebase';
 
 // ─── SRS for wrong sentences ───
 interface SRSItem {
@@ -223,7 +224,7 @@ export function useDictation() {
   const [difficultyMode, setDifficultyMode] = useState<'easy'|'hard'>('easy');
   const [autoLoop, setAutoLoop] = useState(false);
   const [dictationStyle, setDictationStyle] = useState<DictationStyle>('full');
-  const [savedLessons, setSavedLessons] = useState<DictationLesson[]>(loadSavedLessons);
+  const [savedLessons, setSavedLessons] = useState<DictationLesson[]>([]);
   const [currentLesson, setCurrentLesson] = useState<DictationLesson | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [userInput, setUserInput] = useState('');
@@ -231,7 +232,8 @@ export function useDictation() {
   const [lastDiff, setLastDiff] = useState<{ userDiff: DiffWord[]; correctDiff: DiffWord[]; score: number } | null>(null);
   const [sessionScores, setSessionScores] = useState<number[]>([]);
   const [isSlowSpeed, setIsSlowSpeed] = useState(false);
-  const [srsItems, setSrsItems] = useState<SRSItem[]>(loadSRSItems);
+  const [srsItems, setSrsItems] = useState<SRSItem[]>([]);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   // Cloze state
   const [currentCloze, setCurrentCloze] = useState<ClozeData | null>(null);
@@ -258,6 +260,39 @@ export function useDictation() {
   const currentSentence = currentLesson?.sentences[currentIndex] ?? null;
   const totalSentences = currentLesson?.sentences.length ?? 0;
   const isLastSentence = currentIndex >= totalSentences - 1;
+
+  // ─── Initial Load from Cloud ───
+  useEffect(() => {
+    const initData = async () => {
+      const cloudData = await loadDataFromCloud();
+      let initialLessons = cloudData?.dictationLessons;
+      let initialSrs = cloudData?.dictationSrs;
+
+      if (!initialLessons) {
+        initialLessons = loadSavedLessons();
+      }
+      if (!initialSrs) {
+        initialSrs = loadSRSItems();
+      }
+
+      setSavedLessons(initialLessons || []);
+      setSrsItems(initialSrs || []);
+      setIsLoaded(true);
+    };
+    initData();
+  }, []);
+
+  const updateSavedLessons = useCallback((lessons: DictationLesson[]) => {
+    setSavedLessons(lessons);
+    saveLessonsToStorage(lessons);
+    syncDataToCloud({ dictationLessons: lessons });
+  }, []);
+
+  const updateSrsItems = useCallback((items: SRSItem[]) => {
+    setSrsItems(items);
+    saveSRSItems(items);
+    syncDataToCloud({ dictationSrs: items });
+  }, []);
 
   // ─── YouTube Import ───
   const importFromYouTube = useCallback(async () => {
@@ -391,12 +426,11 @@ Pick 10-25 of the best sentences. Return valid JSON only.`
     };
 
     const updated = [lesson, ...savedLessons];
-    setSavedLessons(updated);
-    saveLessonsToStorage(updated);
+    updateSavedLessons(updated);
     setImportPreview(null);
     setYoutubeUrl('');
     setPhase('browse');
-  }, [importPreview, savedLessons, selectedSentenceIds]);
+  }, [importPreview, savedLessons, selectedSentenceIds, updateSavedLessons]);
 
   // ─── Start Practice ───
   const startLesson = useCallback((lesson: DictationLesson) => {
@@ -469,18 +503,18 @@ Pick 10-25 of the best sentences. Return valid JSON only.`
             lastWrong: Date.now(),
           }];
         }
-        saveSRSItems(updated);
+        updateSrsItems(updated);
         return updated;
       });
     } else {
       // If score >= 80%, remove from SRS if exists
       setSrsItems(prev => {
         const updated = prev.filter(item => item.sentence.id !== currentSentence.id);
-        saveSRSItems(updated);
+        updateSrsItems(updated);
         return updated;
       });
     }
-  }, [currentSentence, userInput, isChecked, currentLesson, difficultyMode, stats]);
+  }, [currentSentence, userInput, isChecked, currentLesson, difficultyMode, stats, updateSrsItems]);
 
   // ─── Reveal Answer (Shadowing mode) ───
   const revealAnswer = useCallback(() => {
@@ -514,9 +548,8 @@ Pick 10-25 of the best sentences. Return valid JSON only.`
   // ─── Delete Lesson ───
   const deleteLesson = useCallback((lessonId: string) => {
     const updated = savedLessons.filter(l => l.id !== lessonId);
-    setSavedLessons(updated);
-    saveLessonsToStorage(updated);
-  }, [savedLessons]);
+    updateSavedLessons(updated);
+  }, [savedLessons, updateSavedLessons]);
 
   // ─── Back to browse ───
   const exitPractice = useCallback(() => {
@@ -583,13 +616,14 @@ Pick 10-25 of the best sentences. Return valid JSON only.`
             lastWrong: Date.now(),
           }];
         }
-        saveSRSItems(updated);
+        updateSrsItems(updated);
         return updated;
       });
     }
-  }, [currentCloze, currentSentence, currentLesson, stats]);
+  }, [currentCloze, currentSentence, currentLesson, stats, updateSrsItems]);
 
   return {
+    isLoaded,
     // Phase & Mode
     phase, setPhase,
     mode, setMode,
