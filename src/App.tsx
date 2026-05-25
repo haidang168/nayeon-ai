@@ -1,36 +1,48 @@
-import React, { useState, useEffect } from 'react';
-import { MessageCircle, Layers, BookHeart, BookOpen, Search, Wand2, Coffee, Plane, Sparkles, PenTool, Headphones, ClipboardList, Target } from 'lucide-react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
+import { MessageCircle, Layers, BookHeart, BookOpen, Search, Wand2, Coffee, Plane, Sparkles, PenTool, Headphones, ClipboardList, Target, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 import { useStorage } from './hooks/useStorage';
 import { useAudio } from './hooks/useAudio';
 import { useVoiceRecognition } from './hooks/useVoiceRecognition';
 import { useChat } from './hooks/useChat';
+import { lemmatizeFrench } from './lib/french-utils';
 
+// Always loaded (needed on first paint for Speaking tab)
 import { Header } from './components/Header';
 import { ChatWindow } from './components/ChatWindow';
 import { ChatInput } from './components/ChatInput';
-import { HistoryTab } from './components/HistoryTab';
-import { PhrasebookTab } from './components/PhrasebookTab';
-import { ExamsTab } from './components/ExamsTab';
-import { DictationPractice } from './components/DictationPractice';
 import { DictionaryPopup } from './components/DictionaryPopup';
 import { EvaluationModal } from './components/EvaluationModal';
-import { QAPractice } from './components/QAPractice';
-import { StatsDashboard } from './components/StatsDashboard';
+
+// Lazy-loaded tabs — only fetched when user navigates to them
+const DictationPractice = React.lazy(() => import('./components/DictationPractice').then(m => ({ default: m.DictationPractice })));
+const QAPractice = React.lazy(() => import('./components/QAPractice').then(m => ({ default: m.QAPractice })));
+const SentenceBuilder = React.lazy(() => import('./components/SentenceBuilder').then(m => ({ default: m.SentenceBuilder })));
+const StatsDashboard = React.lazy(() => import('./components/StatsDashboard').then(m => ({ default: m.StatsDashboard })));
+const ExamsTab = React.lazy(() => import('./components/ExamsTab').then(m => ({ default: m.ExamsTab })));
+const HistoryTab = React.lazy(() => import('./components/HistoryTab').then(m => ({ default: m.HistoryTab })));
+const PhrasebookTab = React.lazy(() => import('./components/PhrasebookTab').then(m => ({ default: m.PhrasebookTab })));
+
+// Suspense fallback for lazy tabs
+const TabLoader = () => (
+  <div className="flex-1 flex items-center justify-center">
+    <Loader2 className="w-6 h-6 animate-spin text-brand-primary" />
+  </div>
+);
 
 import { Scenario, FavoriteItem, SessionData } from './types';
 
 const SCENARIOS: Scenario[] = [
-  { id: 'free', icon: <Sparkles size={20} />, label: 'Tự do', prompt: 'Bạn là Nayeon (TWICE), một cô giáo tiếng Pháp dễ thương và năng động. BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC SỬ DỤNG BẤT KỲ MỘT EMOJI HOẶC BIỂU TƯỢNG CẢM XÚC NÀO TRONG TIN NHẮN (không dùng 🐰, 💕, ✨,...). Hãy trò chuyện tự do với học viên.' },
-  { id: 'delf', icon: <Layers size={20} />, label: 'Thi thử DELF (Rút gọn)', prompt: 'Bạn là giám khảo thi DELF. BỎ QUA PHẦN CHÀO HỎI/GIỚI THIỆU TÊN TUỔI. Hãy đưa ra ngay một đề thi TÌNH HUỐNG/ĐÓNG VAI hoặc TRANH LUẬN thực tế (CIEP).\n\nCẤU TRÚC: Phụ thuộc vào trình độ được chọn, hãy lấy đề thi thật.\nKHI KẾT THÚC: Nhận xét BẰNG TIẾNG ANH (Markdown Table: Strengths, Areas for Improvement, Suggested Vocabulary).', goal: 'Vào thẳng phần hội thoại/tình huống DELF thực tế. In bảng nhận xét khi hoàn thành.' },
+  { id: 'free', icon: <Sparkles size={20} />, label: 'Tự do', prompt: 'Tình huống giao tiếp đời sống thực tế hàng ngày. Đóng vai tự nhiên trong bối cảnh được giao. KHÔNG dùng emoji.' },
+  { id: 'delf', icon: <Layers size={20} />, label: 'Thi thử DELF (Rút gọn)', prompt: 'Bạn là giám khảo thi DELF khó tính nhưng công bằng của CIEP. BỎ QUA MÀN CHÀO HỎI. Hãy đưa ra ngay một đề thi TÌNH HUỐNG/ĐÓNG VAI hoặc TRANH LUẬN thực tế và chất lượng cao.\n\nCẤU TRÚC: Phụ thuộc vào trình độ được chọn, hãy lấy đề thi thật.\nKHI KẾT THÚC: Nhận xét BẰNG TIẾNG ANH (Markdown Table: Strengths, Areas for Improvement, Suggested Vocabulary).', goal: 'Vào thẳng phần hội thoại/tình huống DELF thực tế. In bảng nhận xét khi hoàn thành.' },
 ];
 
 type TabId = 'speaking' | 'dictation' | 'vocab' | 'exams' | 'stats' | 'history';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('stats');
-  const [speakingMode, setSpeakingMode] = useState<'chat' | 'qa'>('chat');
+  const [speakingMode, setSpeakingMode] = useState<'chat' | 'qa' | 'sentence-builder'>('chat');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [customTopic, setCustomTopic] = useState('');
   const [userInput, setUserInput] = useState('');
@@ -95,10 +107,16 @@ export default function App() {
     };
   }, []);
 
+  // Debounced save: avoids spamming Firebase during AI streaming (was 10-20 writes/sec)
+  const syncTimerRef = useRef<number>(0);
   useEffect(() => {
     if (chat.messages.length > 0) {
-      storage.saveMessages(chat.messages);
+      clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = window.setTimeout(() => {
+        storage.saveMessages(chat.messages);
+      }, 3000);
     }
+    return () => clearTimeout(syncTimerRef.current);
   }, [chat.messages, storage]);
 
   const handleEndConversation = () => {
@@ -142,8 +160,33 @@ export default function App() {
     if (exists) {
       storage.saveFavorites(storage.favorites.filter(f => f.id !== item.id));
     } else {
+      // Add immediately with original text
       storage.saveFavorites([item, ...storage.favorites]);
+      
+      // Then lemmatize in the background and update
+      lemmatizeFrench(item.textFr).then(lemma => {
+        if (lemma && lemma.toLowerCase() !== item.textFr.toLowerCase()) {
+          // Check if lemmatized form already exists in favorites (avoid duplicates)
+          storage.saveFavorites((prev: FavoriteItem[]) => {
+            const duplicateExists = prev.some(
+              f => f.id !== item.id && f.textFr.toLowerCase() === lemma.toLowerCase()
+            );
+            if (duplicateExists) {
+              // Remove the newly added one since a lemma duplicate exists
+              return prev.filter(f => f.id !== item.id);
+            }
+            // Update textFr to the lemmatized form
+            return prev.map(f => f.id === item.id ? { ...f, textFr: lemma } : f);
+          });
+        }
+      }).catch(() => {
+        // If lemmatization fails, keep the original — it's already saved
+      });
     }
+  };
+
+  const updateFavoriteInfo = (id: string | number, textEnVi: string) => {
+    storage.saveFavorites((prev: FavoriteItem[]) => prev.map(f => f.id === id ? { ...f, textEnVi } : f));
   };
 
   if (!storage.isLoaded) return null;
@@ -232,19 +275,36 @@ export default function App() {
               >
               <div className="flex flex-col h-full bg-white/40">
                   {speakingMode === 'qa' ? (
-                    <QAPractice
-                      playAudio={audio.playAudio}
-                      isSpeaking={audio.isSpeaking}
-                      difficulty={chat.difficulty}
-                      onBack={() => setSpeakingMode('chat')}
-                    />
+                    <Suspense fallback={<TabLoader />}>
+                      <QAPractice
+                        playAudio={audio.playAudio}
+                        isSpeaking={audio.isSpeaking}
+                        difficulty={chat.difficulty}
+                        onBack={() => setSpeakingMode('chat')}
+                        favorites={storage.favorites}
+                        toggleFavorite={toggleFavorite}
+                      />
+                    </Suspense>
+                  ) : speakingMode === 'sentence-builder' ? (
+                    <Suspense fallback={<TabLoader />}>
+                      <SentenceBuilder
+                        playAudio={audio.playAudio}
+                        isSpeaking={audio.isSpeaking}
+                        difficulty={chat.difficulty}
+                        onBack={() => setSpeakingMode('chat')}
+                      />
+                    </Suspense>
                   ) : (
                     <>
-                      {/* Q&A toggle bar */}
+                      {/* Q&A + Sentence Builder toggle bar */}
                       <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-100/50 shrink-0">
                         <button onClick={() => setSpeakingMode('qa')}
                           className="text-xs font-bold text-slate-400 hover:text-blue-500 bg-slate-50 hover:bg-blue-50 px-3 py-1.5 rounded-lg transition-colors active:scale-95 flex items-center gap-1">
                           🎯 Luyện Q&A
+                        </button>
+                        <button onClick={() => setSpeakingMode('sentence-builder')}
+                          className="text-xs font-bold text-slate-400 hover:text-purple-500 bg-slate-50 hover:bg-purple-50 px-3 py-1.5 rounded-lg transition-colors active:scale-95 flex items-center gap-1">
+                          🔀 Ghép câu
                         </button>
                       </div>
                       <ChatWindow 
@@ -278,34 +338,49 @@ export default function App() {
             {activeTab === 'dictation' && (
               <motion.div key="dictation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="flex-1 flex flex-col bg-white/50 backdrop-blur-xl sm:rounded-3xl border border-white shadow-xl overflow-hidden min-w-0 z-10">
-                <DictationPractice playAudio={audio.playAudio} isSpeaking={audio.isSpeaking} />
+                <Suspense fallback={<TabLoader />}>
+                  <DictationPractice playAudio={audio.playAudio} playWordAudio={audio.playWordAudio} isSpeaking={audio.isSpeaking} />
+                </Suspense>
               </motion.div>
             )}
 
             {activeTab === 'vocab' && (
-              <PhrasebookTab 
-                favorites={storage.favorites}
-                toggleFavorite={toggleFavorite}
-                playAudio={audio.playAudio}
-              />
+              <Suspense fallback={<TabLoader />}>
+                <PhrasebookTab 
+                  favorites={storage.favorites}
+                  toggleFavorite={toggleFavorite}
+                  updateFavoriteInfo={updateFavoriteInfo}
+                  playAudio={audio.playAudio}
+                />
+              </Suspense>
             )}
 
             {activeTab === 'exams' && (
-              <ExamsTab playAudio={audio.playAudio} isSpeaking={audio.isSpeaking} />
+              <Suspense fallback={<TabLoader />}>
+                <ExamsTab playAudio={audio.playAudio} isSpeaking={audio.isSpeaking} />
+              </Suspense>
             )}
 
             {activeTab === 'stats' && (
               <motion.div key="stats" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="flex-1 flex flex-col bg-white/50 backdrop-blur-xl sm:rounded-3xl border border-white shadow-xl overflow-hidden min-w-0 z-10">
-                <StatsDashboard />
+                <Suspense fallback={<TabLoader />}>
+                  <StatsDashboard
+                    vocabCount={storage.favorites.length}
+                    conversationCount={storage.pastConversations.length}
+                    streak={storage.streak}
+                  />
+                </Suspense>
               </motion.div>
             )}
 
             {activeTab === 'history' && (
-              <HistoryTab 
-                pastConversations={storage.pastConversations}
-                setPastConversations={storage.savePastConversations}
-              />
+              <Suspense fallback={<TabLoader />}>
+                <HistoryTab 
+                  pastConversations={storage.pastConversations}
+                  setPastConversations={storage.savePastConversations}
+                />
+              </Suspense>
             )}
           </AnimatePresence>
         </main>

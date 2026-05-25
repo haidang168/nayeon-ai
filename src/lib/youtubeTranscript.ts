@@ -82,6 +82,10 @@ export async function fetchVideoInfo(videoId: string): Promise<{ title: string; 
  * Merge short transcript segments into full sentences.
  * YouTube often splits sentences into tiny fragments — this merges them
  * into natural sentence boundaries.
+ * 
+ * Handles apostrophe edge cases: YouTube auto-captions frequently split
+ * contractions across segment boundaries (e.g., "I don" + "'t know").
+ * This function rejoins them properly.
  */
 export function mergeSegmentsIntoSentences(segments: TranscriptSegment[], videoId?: string): DictationSentence[] {
   if (segments.length === 0) return [];
@@ -102,14 +106,39 @@ export function mergeSegmentsIntoSentences(segments: TranscriptSegment[], videoI
     cleanSegments.push(seg);
   }
 
-  // Pass 1: Split segments that contain sentence-ending punctuation (. ! ?) in the middle
+  // Pre-process: Rejoin segments split at apostrophe boundaries.
+  // YouTube auto-captions often split contractions like:
+  //   "I don" + "'t know" → should become "I don't know"
+  //   "c" + "'est la vie" → should become "c'est la vie"
+  //   "l" + "'homme" → should become "l'homme"
+  const rejoinedSegments: TranscriptSegment[] = [];
+  for (let i = 0; i < cleanSegments.length; i++) {
+    const seg = { ...cleanSegments[i] };
+    
+    // Look ahead: if next segment starts with apostrophe (straight or curly), merge it into this one
+    while (i + 1 < cleanSegments.length && /^[''ʼ]/.test(cleanSegments[i + 1].text.trim())) {
+      const nextSeg = cleanSegments[i + 1];
+      seg.text = seg.text.trimEnd() + nextSeg.text.trimStart();
+      seg.duration = (nextSeg.start + nextSeg.duration) - seg.start;
+      i++;
+    }
+    
+    rejoinedSegments.push(seg);
+  }
+
+  // Pass 1: Split segments that contain sentence-ending punctuation or pauses in the middle
   const fineSegments: TranscriptSegment[] = [];
-  for (const seg of cleanSegments) {
-    const text = seg.text.replace(/\n/g, ' ').trim();
+  for (const seg of rejoinedSegments) {
+    let text = seg.text.replace(/\n/g, ' ').trim();
     if (!text) continue;
     
-    // Only split on sentence-ending punctuation (. ! ? …) followed by space
-    const parts = text.split(/(?<=[.!?。！？…])\s+/);
+    // Normalize curly/smart apostrophes to straight apostrophe for consistency
+    text = text.replace(/[''ʼ]/g, "'");
+    
+    // Split on sentence-ending punctuation OR commas/colons followed by space.
+    // Use a more careful regex that avoids splitting inside contractions:
+    // Only split on comma/semicolon/colon when NOT preceded by an apostrophe-based contraction.
+    const parts = text.split(/(?<=[.!?。！？…])\s+|(?<=[,;:])\s+(?=[A-ZÀ-Ÿa-zà-ÿ])/);
     
     if (parts.length > 1) {
       let currentStart = seg.start;
@@ -131,14 +160,16 @@ export function mergeSegmentsIntoSentences(segments: TranscriptSegment[], videoI
     }
   }
 
-  // Pass 2: Merge segments into full sentences — ONLY split at sentence-ending punctuation (. ! ? …)
+  // Pass 2: Merge segments into sentences or smaller chunks
   const sentences: DictationSentence[] = [];
   let buffer = '';
   let startTime = 0;
   let endTime = 0;
 
   const flushBuffer = () => {
-    const finalText = buffer.trim();
+    let finalText = buffer.trim();
+    // Final cleanup: fix any remaining spaces before apostrophes (e.g., "don 't" → "don't")
+    finalText = finalText.replace(/\s+([''ʼ'])/g, '$1');
     if (finalText.length > 0) {
       sentences.push({
         id: `s-${sentences.length}`,
@@ -159,10 +190,26 @@ export function mergeSegmentsIntoSentences(segments: TranscriptSegment[], videoI
       startTime = seg.start;
       endTime = seg.start + seg.duration;
     } else {
-      // Only stop at real sentence endings: . ! ? …
+      const wordsCount = buffer.trim().split(/\s+/).length;
+      const nextWordsCount = seg.text.trim().split(/\s+/).length;
+
+      // If next segment starts with apostrophe, join without space (contraction continuation)
+      const startsWithApostrophe = /^[''ʼ']/.test(seg.text.trim());
+
+      // Flush at sentence-ending punctuation (always)
       const isSentenceEnd = /[.!?。！？…]$/.test(buffer.trim());
 
-      if (isSentenceEnd) {
+      // Flush at comma/semicolon/colon if we already have 4+ words (natural phrase boundary)
+      const isPhraseEnd = /[,;:]$/.test(buffer.trim()) && wordsCount >= 4;
+
+      // Hard cap: don't let any chunk exceed 8 words
+      const wouldExceedCap = wordsCount + nextWordsCount > 8;
+
+      if (startsWithApostrophe) {
+        // Contraction continuation: join without space
+        buffer = buffer.trimEnd() + seg.text.trimStart();
+        endTime = seg.start + seg.duration;
+      } else if (isSentenceEnd || isPhraseEnd || wouldExceedCap) {
         flushBuffer();
         buffer = seg.text;
         startTime = seg.start;
@@ -179,4 +226,55 @@ export function mergeSegmentsIntoSentences(segments: TranscriptSegment[], videoI
   }
 
   return sentences;
+}
+
+/**
+ * Common French filler / interjection words that are not useful for dictation practice.
+ * These are matched case-insensitively against the entire sentence text.
+ */
+const FILLER_PATTERNS = new Set([
+  'oui', 'non', 'ah', 'oh', 'euh', 'hein', 'bon', 'bah', 'bof',
+  'voilà', 'alors', 'donc', 'ok', 'ouais', 'allez', 'tiens',
+  'merci', 'bonjour', 'salut', 'bonsoir', 'au revoir', 'ciao',
+  'ah bon', 'ah oui', 'ah non', 'et voilà', 'c\'est ça',
+  'exactement', 'absolument', 'd\'accord', 'bien sûr',
+]);
+
+/**
+ * Pre-filter sentences using code-based heuristics to remove junk
+ * BEFORE sending to AI. This reduces noise and saves AI tokens.
+ *
+ * Rules:
+ * - Remove sentences with < 3 words or > 20 words
+ * - Remove pure filler/interjections
+ * - Remove sentences with > 30% numbers/special characters
+ * - Remove sentences where speech rate > 6 words/second (too fast for shadowing)
+ * - Remove sentences with duration < 0.8s (noise)
+ */
+export function preFilterSentences(sentences: DictationSentence[]): DictationSentence[] {
+  return sentences.filter(s => {
+    const text = s.text.trim();
+    const words = text.split(/\s+/).filter(w => w.length > 0);
+    const wordCount = words.length;
+
+    // 1. Word count bounds
+    if (wordCount < 3 || wordCount > 20) return false;
+
+    // 2. Duration too short (noise / artifacts)
+    const duration = s.endTime - s.startTime;
+    if (duration < 0.8) return false;
+
+    // 3. Speech rate too fast for shadowing (> 6 words/sec)
+    if (duration > 0 && wordCount / duration > 6) return false;
+
+    // 4. Pure filler sentence (entire text matches a known filler)
+    const lower = text.toLowerCase().replace(/[.,!?;:'"()]/g, '').trim();
+    if (FILLER_PATTERNS.has(lower)) return false;
+
+    // 5. Too many numbers/special characters (> 30% of chars)
+    const specialCount = (text.match(/[0-9@#$%^&*+=<>{}[\]|\\~`]/g) || []).length;
+    if (text.length > 0 && specialCount / text.length > 0.3) return false;
+
+    return true;
+  });
 }

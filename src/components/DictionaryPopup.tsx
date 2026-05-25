@@ -18,6 +18,7 @@ interface DictionaryPopupProps {
 interface DictResult {
   word: string;
   translation: string;
+  lemma?: string;
 }
 
 export const DictionaryPopup: React.FC<DictionaryPopupProps> = ({ word, x, y, onClose, playAudio, favorites, toggleFavorite, onAskChat }) => {
@@ -25,22 +26,7 @@ export const DictionaryPopup: React.FC<DictionaryPopupProps> = ({ word, x, y, on
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(false);
 
-  const playFrenchAudio = (text: string) => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'fr-FR';
-    // Find a good French voice
-    const voices = window.speechSynthesis.getVoices();
-    const frVoice = voices.find(v => v.lang.startsWith('fr-') && (v.name.includes('Google') || v.name.includes('Premium')));
-    if (frVoice) {
-      utterance.voice = frVoice;
-    } else {
-      const fallback = voices.find(v => v.lang.startsWith('fr-'));
-      if (fallback) utterance.voice = fallback;
-    }
-    window.speechSynthesis.speak(utterance);
-  };
+  // Now uses Gemini TTS via the playAudio prop (same high-quality voice as the rest of the app)
 
   useEffect(() => {
     let isMounted = true;
@@ -54,11 +40,18 @@ export const DictionaryPopup: React.FC<DictionaryPopupProps> = ({ word, x, y, on
               role: "system", 
               content: `You are a French-English dictionary. Translate the French word/phrase the user sends into English as CONCISELY as possible.
 IMPORTANT: Only provide the core meaning, 1-3 words maximum.
+Also provide the BASE/DICTIONARY form (lemma) of the word:
+- Verbs → infinitive (mange → manger, a → avoir)
+- Nouns → singular (chats → chat)  
+- Adjectives → masculine singular (grandes → grand, belles → beau)
+- Articles → base form (les → le)
+- If already in base form, repeat it
 
 Return JSON with EXACTLY this structure:
 {
   "word": "original French word/phrase",
-  "translation": "concise English meaning"
+  "translation": "concise English meaning",
+  "lemma": "base dictionary form"
 }
 Return valid JSON only.`
             },
@@ -135,12 +128,15 @@ Return valid JSON only.`
           <div className="space-y-5">
             <div className="pr-8 cursor-move active:cursor-grabbing" title="Kéo thả để di chuyển">
               <h3 className="text-[22px] font-bold text-white font-serif tracking-wide leading-tight">{data.word || word}</h3>
+              {data.lemma && data.lemma.toLowerCase() !== (data.word || word).toLowerCase() && (
+                <p className="text-amber-400 text-xs font-bold mt-1">→ {data.lemma} <span className="text-stone-500 font-normal">(dạng gốc)</span></p>
+              )}
               <p className="text-stone-300 italic mt-1 text-[15px]">{data.translation}</p>
             </div>
 
             <div className="flex items-center gap-3">
               <button 
-                onClick={() => playFrenchAudio(data.word || word)}
+                onClick={() => playAudio(data.word || word)}
                 className="flex items-center gap-2 px-5 py-2.5 bg-[#332f2b] hover:bg-[#3d3834] text-white rounded-full text-sm font-semibold transition-colors active:scale-95"
               >
                 <Volume2 size={16} />
@@ -151,8 +147,8 @@ Return valid JSON only.`
                 <button 
                   onClick={() => {
                     toggleFavorite({
-                      id: `dict-${data.word || word}`,
-                      textFr: data.word || word,
+                      id: `dict-${data.lemma || data.word || word}`,
+                      textFr: data.lemma || data.word || word,
                       textEnVi: data.translation,
                       source: 'flashcard'
                     });

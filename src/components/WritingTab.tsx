@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { PenTool, ArrowLeft, Send, Loader2, CheckCircle2, AlertTriangle, BookOpen, PlayCircle } from 'lucide-react';
+import { PenTool, ArrowLeft, Send, Loader2, CheckCircle2, AlertTriangle, BookOpen, PlayCircle, Sparkles } from 'lucide-react';
 import { useExams } from '../hooks/useExams';
 import { useWriting } from '../hooks/useWriting';
+import { useAIExamGenerator } from '../hooks/useAIExamGenerator';
+import { AIExamGeneratorPanel } from './AIExamGeneratorPanel';
 
 export const WritingTab = () => {
   const [selectedLevel, setSelectedLevel] = useState<string>('B1');
@@ -9,6 +11,10 @@ export const WritingTab = () => {
   const [userText, setUserText] = useState('');
   const { exams: examsData, isLoading } = useExams('writing');
   const { gradeEssay, isGrading, evaluation, setEvaluation } = useWriting();
+  const aiGen = useAIExamGenerator();
+
+  // AI-generated exams stored in session
+  const [aiExams, setAiExams] = useState<any[]>([]);
 
   const handleSelectExam = (exam: any) => {
     setSelectedExam(exam);
@@ -30,13 +36,20 @@ export const WritingTab = () => {
     gradeEssay(selectedExam.prompt, userText, selectedExam.level);
   };
 
+  const handleAIGenerate = async (level: string, topic: string) => {
+    const exam = await aiGen.generateWritingExam(level, topic);
+    if (exam) {
+      setAiExams(prev => [exam, ...prev]);
+      handleSelectExam(exam);
+    }
+  };
+
   const wordCount = userText.trim().split(/\s+/).filter(w => w.length > 0).length;
 
-  // Filter exams based on selected level
-  const filteredExams = examsData.filter((exam: any) => exam.level === selectedLevel);
-
-  // LEVELS available in data
-  const availableLevels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'].filter(lvl => examsData.some((e: any) => e.level === lvl));
+  // Combine AI exams + static exams, filter by level
+  const allExams = [...aiExams, ...examsData];
+  const filteredExams = allExams.filter((exam: any) => exam.level === selectedLevel);
+  const ALL_LEVELS = ['A1', 'A2', 'B1', 'B2'];
 
   if (!selectedExam) {
     return (
@@ -44,9 +57,9 @@ export const WritingTab = () => {
         <div className="p-4 sm:p-8 max-w-5xl mx-auto w-full">
           <h2 className="text-2xl sm:text-3xl font-bold text-slate-800 mb-6 font-serif">Đề thi DELF {selectedLevel} (Viết)</h2>
           
-          {/* Fookuo Style Level Tabs */}
-          <div className="flex gap-2 sm:gap-4 mb-8 overflow-x-auto pb-2 scrollbar-hide">
-            {availableLevels.map(lvl => (
+          {/* Level Tabs */}
+          <div className="flex gap-2 sm:gap-4 mb-6 overflow-x-auto pb-2 scrollbar-hide">
+            {ALL_LEVELS.map(lvl => (
               <button
                 key={lvl}
                 onClick={() => setSelectedLevel(lvl)}
@@ -62,7 +75,16 @@ export const WritingTab = () => {
             ))}
           </div>
 
-          {/* Fookuo Style Exam Cards */}
+          {/* AI Generator Panel */}
+          <AIExamGeneratorPanel
+            type="writing"
+            selectedLevel={selectedLevel}
+            isGenerating={aiGen.isGenerating}
+            genError={aiGen.genError}
+            onGenerate={handleAIGenerate}
+          />
+
+          {/* Exam Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6">
             {isLoading ? (
               <div className="col-span-full py-12 flex flex-col items-center justify-center text-slate-400 gap-2">
@@ -71,13 +93,22 @@ export const WritingTab = () => {
               </div>
             ) : filteredExams.length === 0 ? (
               <div className="col-span-full py-12 text-center text-slate-400">
-                Chưa có đề thi nào cho trình độ này. Bạn có thể tự tạo trong Admin.
+                Chưa có đề thi nào cho trình độ này. Hãy thử tạo đề bằng AI ở trên!
               </div>
             ) : (
               filteredExams.map((exam: any) => (
-                <div key={exam.id} className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 flex flex-col justify-between hover:shadow-lg transition-all min-h-[160px]">
+                <div key={exam.id} className={`bg-white rounded-2xl border p-5 sm:p-6 flex flex-col justify-between hover:shadow-lg transition-all min-h-[160px] ${
+                  exam.id.startsWith('ai-') ? 'border-amber-200 ring-1 ring-amber-100' : 'border-slate-200'
+                }`}>
                   <div>
-                    <h3 className="font-bold text-slate-800 text-lg mb-2 line-clamp-2">{exam.title}</h3>
+                    <div className="flex items-center gap-2 mb-2">
+                      {exam.id.startsWith('ai-') && (
+                        <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-600 rounded-md text-[10px] font-bold uppercase tracking-wider">
+                          <Sparkles size={10} /> AI
+                        </span>
+                      )}
+                      <h3 className="font-bold text-slate-800 text-lg line-clamp-2">{exam.title}</h3>
+                    </div>
                     <p className="text-xs text-slate-400 font-medium">Yêu cầu: ~{exam.minWords} từ</p>
                   </div>
                   <div className="flex justify-end mt-4">
@@ -107,6 +138,7 @@ export const WritingTab = () => {
             <ArrowLeft size={20} />
           </button>
           <h2 className="font-bold text-slate-800 line-clamp-1 text-sm sm:text-base md:text-lg">
+            {selectedExam.id?.startsWith('ai-') && <Sparkles size={14} className="inline mr-1 text-amber-500" />}
             DELF {selectedExam.level} - {selectedExam.title}
           </h2>
         </div>
@@ -125,7 +157,7 @@ export const WritingTab = () => {
       <div className="flex-1 overflow-y-auto p-3 sm:p-6 flex flex-col lg:flex-row gap-4 sm:gap-6 items-start w-full max-w-7xl mx-auto">
         
         {/* Left Column: Prompt */}
-        <div className="w-full lg:w-1/3 bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm shrink-0 top-6 sticky">
+        <div className="w-full lg:w-5/12 bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm shrink-0 top-6 sticky">
           <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 text-lg">
             <BookOpen size={20} className="text-[#1a56db]" /> Sujet (Đề bài)
           </h3>
@@ -137,7 +169,7 @@ export const WritingTab = () => {
         </div>
 
         {/* Right Column: Editor or Evaluation */}
-        <div className="w-full lg:w-2/3 flex flex-col flex-1 min-h-[400px]">
+        <div className="w-full lg:w-7/12 flex flex-col flex-1 min-h-[400px]">
           {evaluation ? (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4">
               <div className="bg-[#1a56db] text-white p-5 flex justify-between items-center">

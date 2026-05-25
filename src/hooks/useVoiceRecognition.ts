@@ -32,7 +32,7 @@ function getBestMimeType(): string {
   return '';
 }
 
-export function useVoiceRecognition(onResult: (text: string) => void, language?: string) {
+export function useVoiceRecognition(onResult: (text: string) => void, language?: string, prompt?: string) {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState('');
@@ -42,6 +42,7 @@ export function useVoiceRecognition(onResult: (text: string) => void, language?:
   const streamRef = useRef<MediaStream | null>(null);
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
+  const autoReleaseTimerRef = useRef<number>(0);
 
   /** Request mic permission and start recording */
   const startRecording = useCallback(async () => {
@@ -101,6 +102,7 @@ export function useVoiceRecognition(onResult: (text: string) => void, language?:
             file: audioFile,
             model: 'whisper-large-v3-turbo',
             ...(language ? { language } : {}),
+            ...(prompt ? { prompt } : {}),
             response_format: 'json',
             temperature: 0.0,
           });
@@ -120,6 +122,17 @@ export function useVoiceRecognition(onResult: (text: string) => void, language?:
       // Do not use timeslice (100) as it is notoriously buggy on iOS Safari
       recorder.start();
       setIsRecording(true);
+
+      // Auto-release mic after 60s to prevent audio ducking on mobile
+      clearTimeout(autoReleaseTimerRef.current);
+      autoReleaseTimerRef.current = window.setTimeout(() => {
+        if (mediaRecorderRef.current?.state === 'recording') {
+          console.log('[Voice] Auto-releasing mic after 60s');
+          try { mediaRecorderRef.current.stop(); } catch (e) {}
+          setIsRecording(false);
+          setIsProcessing(true);
+        }
+      }, 60000);
     } catch (err: any) {
       if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
         alert('Vui lòng cho phép truy cập Microphone để dùng tính năng ghi âm.');
@@ -133,6 +146,7 @@ export function useVoiceRecognition(onResult: (text: string) => void, language?:
   /** Stop recording and trigger Whisper transcription */
   const stopRecording = useCallback(() => {
     if (!isRecording || !mediaRecorderRef.current) return;
+    clearTimeout(autoReleaseTimerRef.current);
     setIsRecording(false);
     setIsProcessing(true);
     try {

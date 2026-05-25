@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Volume2, ArrowLeft, Loader2, BookOpen, Sparkles, Copy, Check } from 'lucide-react';
+import { Volume2, ArrowLeft, Loader2 } from 'lucide-react';
 import { groq } from '../lib/groq';
 
 interface WordDetailData {
@@ -8,41 +8,22 @@ interface WordDetailData {
   phonetic: string;
   type: string;
   translation: string;
-  wordFamily: string[];
-  collocations: { fr: string; en: string }[];
+  usageContext: string;
   examples: { fr: string; en: string }[];
-  synonyms: string[];
-  antonyms: string[];
-  confusingWords: string[];
+  synonyms: { word: string; example: string }[];
 }
 
 interface WordDetailPanelProps {
   word: string;
   initialTranslation?: string;
   onBack: () => void;
-  playAudio: (text: string) => void;
+  playAudio: (text: string, rate?: number) => void;
 }
 
 export const WordDetailPanel: React.FC<WordDetailPanelProps> = ({ word, initialTranslation, onBack, playAudio }) => {
   const [data, setData] = useState<WordDetailData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
-
-  const playFrenchAudio = (text: string) => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'fr-FR';
-    const voices = window.speechSynthesis.getVoices();
-    const frVoice = voices.find(v => v.lang.startsWith('fr-') && (v.name.includes('Google') || v.name.includes('Premium')));
-    if (frVoice) utterance.voice = frVoice;
-    else {
-      const fallback = voices.find(v => v.lang.startsWith('fr-'));
-      if (fallback) utterance.voice = fallback;
-    }
-    window.speechSynthesis.speak(utterance);
-  };
 
   useEffect(() => {
     let isMounted = true;
@@ -61,20 +42,17 @@ Return JSON with EXACTLY this structure:
 {
   "word": "original word/phrase",
   "phonetic": "IPA phonetic transcription",
-  "type": "part of speech (noun, verb, adj, etc.)",
-  "translation": "concise English translation",
-  "wordFamily": ["related word 1", "related word 2"],
-  "collocations": [
-    { "fr": "French collocation phrase", "en": "English meaning" }
-  ],
+  "type": "part of speech (e.g. noun, verb, adj)",
+  "translation": "English/Vietnamese equivalent",
+  "usageContext": "Detailed explanation of when and how to use this word, its nuance and register (informal, formal).",
   "examples": [
-    { "fr": "Example sentence in French", "en": "English translation" }
+    { "fr": "Example sentence in French", "en": "English/Vietnamese translation" }
   ],
-  "synonyms": ["synonym 1", "synonym 2"],
-  "antonyms": ["antonym 1", "antonym 2"],
-  "confusingWords": ["easily confused word 1", "easily confused word 2"]
+  "synonyms": [
+    { "word": "synonym", "example": "Short example sentence using this synonym" }
+  ]
 }
-Return valid JSON only. Use empty arrays [] for fields with no data. Provide at least 3 collocations and 2 examples when possible.`
+Return valid JSON only. Use empty arrays [] for fields with no data. Provide at least 3 examples and 2 synonyms when possible.`
             },
             { role: "user", content: word }
           ],
@@ -99,12 +77,6 @@ Return valid JSON only. Use empty arrays [] for fields with no data. Provide at 
     return () => { isMounted = false; };
   }, [word]);
 
-  const handleCopyCollocation = (text: string, idx: number) => {
-    navigator.clipboard.writeText(text);
-    setCopiedIdx(idx);
-    setTimeout(() => setCopiedIdx(null), 1500);
-  };
-
   return (
     <motion.div
       initial={{ opacity: 0, x: 20 }}
@@ -121,12 +93,22 @@ Return valid JSON only. Use empty arrays [] for fields with no data. Provide at 
           <h2 className="text-lg font-bold text-slate-800 truncate">{word}</h2>
           {initialTranslation && <p className="text-sm text-slate-400 truncate">{initialTranslation}</p>}
         </div>
-        <button
-          onClick={() => playFrenchAudio(word)}
-          className="p-2.5 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl shadow-md shadow-blue-200 active:scale-95 transition-transform"
-        >
-          <Volume2 size={18} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => playAudio(word, 0.5)}
+            className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg shadow-sm active:scale-95 transition-all text-xs font-bold"
+            title="Đọc chậm"
+          >
+            0.5x
+          </button>
+          <button
+            onClick={() => playAudio(word, 1.0)}
+            className="p-2 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl shadow-md shadow-blue-200 active:scale-95 transition-transform"
+            title="Đọc bình thường"
+          >
+            <Volume2 size={18} />
+          </button>
+        </div>
       </div>
 
       {/* Content */}
@@ -147,130 +129,101 @@ Return valid JSON only. Use empty arrays [] for fields with no data. Provide at 
           </div>
         ) : (
           <>
-            {/* Word header card */}
-            <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-5 text-white shadow-lg">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="text-2xl font-bold font-serif tracking-wide">{data.word}</h3>
-                  <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                    {data.phonetic && (
-                      <span className="text-blue-300 font-mono text-sm">/{data.phonetic}/</span>
-                    )}
-                    {data.type && (
-                      <span className="text-[11px] font-bold bg-white/15 px-2.5 py-0.5 rounded-md uppercase tracking-wider text-slate-300">{data.type}</span>
-                    )}
-                  </div>
-                </div>
+            {/* PickVocab Style Header */}
+            <div className="mb-6">
+              <div className="flex items-center gap-3 mb-4">
+                <h3 className="text-3xl font-bold text-slate-800">{data.word}</h3>
+                {data.phonetic && (
+                  <span className="text-slate-400 font-medium">/{data.phonetic}/</span>
+                )}
+                <button 
+                  onClick={() => playAudio(data.word)}
+                  className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-full transition-colors active:scale-95"
+                >
+                  <Volume2 size={20} />
+                </button>
               </div>
-              <p className="mt-3 text-lg font-semibold text-amber-300">{data.translation}</p>
 
-              {data.wordFamily && data.wordFamily.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-white/10">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Word Family</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {data.wordFamily.map((w, i) => (
-                      <button key={i} onClick={() => playFrenchAudio(w)}
-                        className="px-2.5 py-1 bg-white/10 hover:bg-white/20 rounded-lg text-xs font-medium text-slate-200 transition-colors active:scale-95">
-                        {w}
-                      </button>
-                    ))}
+              {/* Progress tag mock */}
+              <div className="flex items-center gap-2 mb-6">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Progress</span>
+                <span className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 text-blue-600 text-xs font-bold rounded-md">
+                  <div className="flex gap-0.5">
+                    <div className="w-1.5 h-1.5 bg-blue-600 rounded-sm"></div>
+                    <div className="w-1.5 h-1.5 bg-blue-600 rounded-sm"></div>
+                    <div className="w-1.5 h-1.5 bg-blue-600 rounded-sm"></div>
                   </div>
-                </div>
-              )}
+                  New
+                </span>
+              </div>
+
+              {/* Definition */}
+              <div className="text-slate-700 leading-relaxed text-[15px]">
+                {data.type && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full border border-emerald-400 text-emerald-600 text-xs font-medium mr-2 bg-emerald-50/50">
+                    {data.type}
+                  </span>
+                )}
+                {data.translation && (
+                  <span className="font-medium text-slate-800 mr-2">
+                    (Equivalent: {data.translation})
+                  </span>
+                )}
+              </div>
             </div>
 
-            {/* Collocations */}
-            {data.collocations && data.collocations.length > 0 && (
-              <div className="bg-blue-50 rounded-2xl p-4 border border-blue-100">
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="p-1.5 bg-blue-100 rounded-lg">
-                    <BookOpen size={14} className="text-blue-600" />
-                  </div>
-                  <h4 className="text-xs font-bold text-blue-700 uppercase tracking-wider">Collocations</h4>
-                </div>
-                <div className="space-y-2">
-                  {data.collocations.map((col, i) => (
-                    <div key={i} className="flex items-start gap-2 group">
-                      <button onClick={() => playFrenchAudio(col.fr)}
-                        className="p-1 shrink-0 mt-0.5 text-blue-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity active:scale-95">
-                        <Volume2 size={12} />
-                      </button>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-bold text-slate-800 leading-snug">{col.fr}</p>
-                        <p className="text-xs text-slate-500 mt-0.5">{col.en}</p>
-                      </div>
-                      <button onClick={() => handleCopyCollocation(col.fr, i)}
-                        className="p-1 shrink-0 mt-0.5 text-slate-300 hover:text-slate-500 transition-colors active:scale-95">
-                        {copiedIdx === i ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
-                      </button>
-                    </div>
-                  ))}
-                </div>
+            {/* Usage Context */}
+            {data.usageContext && (
+              <div className="mb-8">
+                <h4 className="text-lg font-bold text-slate-800 mb-3">Usage context</h4>
+                <p className="text-slate-600 leading-relaxed text-[15px]">
+                  {data.usageContext}
+                </p>
               </div>
             )}
 
-            {/* Examples */}
+            {/* Examples (PickVocab style) */}
             {data.examples && data.examples.length > 0 && (
-              <div className="bg-amber-50 rounded-2xl p-4 border border-amber-100">
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="p-1.5 bg-amber-100 rounded-lg">
-                    <Sparkles size={14} className="text-amber-600" />
-                  </div>
-                  <h4 className="text-xs font-bold text-amber-700 uppercase tracking-wider">Examples</h4>
-                </div>
-                <div className="space-y-3">
+              <div className="mb-8">
+                <h4 className="text-lg font-bold text-slate-800 mb-4">Examples</h4>
+                <div className="space-y-6">
                   {data.examples.map((ex, i) => (
-                    <div key={i} className="group cursor-pointer" onClick={() => playFrenchAudio(ex.fr)}>
-                      <p className="text-sm font-medium text-slate-800 leading-snug group-hover:text-blue-600 transition-colors">"{ex.fr}"</p>
-                      <p className="text-xs text-slate-500 mt-0.5 italic">{ex.en}</p>
+                    <div key={i} className="flex gap-4">
+                      <span className="text-slate-400 font-medium w-4 shrink-0 text-right">{i + 1}.</span>
+                      <div className="flex-1">
+                        <div 
+                          className="pl-4 border-l-2 border-slate-200 text-slate-700 mb-2 cursor-pointer hover:border-blue-300 hover:text-blue-700 transition-colors"
+                          onClick={() => playAudio(ex.fr)}
+                        >
+                          <p className="italic text-[15px]">{ex.fr}</p>
+                        </div>
+                        <p className="pl-4 text-slate-500 text-[14px]">{ex.en}</p>
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* Synonyms / Antonyms / Confusing */}
-            {(data.synonyms?.length > 0 || data.antonyms?.length > 0 || data.confusingWords?.length > 0) && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {data.synonyms?.length > 0 && (
-                  <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100">
-                    <h4 className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest mb-2">Synonyms</h4>
-                    <div className="flex flex-wrap gap-1.5">
-                      {data.synonyms.map((s, i) => (
-                        <button key={i} onClick={() => playFrenchAudio(s)}
-                          className="px-2.5 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-700 rounded-lg text-xs font-medium transition-colors active:scale-95">
-                          {s}
-                        </button>
-                      ))}
+            {/* Synonyms (PickVocab style) */}
+            {data.synonyms && data.synonyms.length > 0 && (
+              <div className="mb-8">
+                <h4 className="text-lg font-bold text-slate-800 mb-4">Synonyms</h4>
+                <div className="space-y-6">
+                  {data.synonyms.map((syn, i) => (
+                    <div key={i} className="flex flex-col gap-2">
+                      <button 
+                        onClick={() => playAudio(syn.word)}
+                        className="text-left font-medium text-blue-600 hover:underline text-[16px] w-fit"
+                      >
+                        {syn.word}
+                      </button>
+                      <div className="pl-4 border-l-2 border-slate-200 text-slate-600">
+                        <p className="italic text-[15px]">{syn.example}</p>
+                      </div>
                     </div>
-                  </div>
-                )}
-                {data.antonyms?.length > 0 && (
-                  <div className="bg-rose-50 rounded-2xl p-4 border border-rose-100">
-                    <h4 className="text-[10px] font-bold text-rose-600 uppercase tracking-widest mb-2">Antonyms</h4>
-                    <div className="flex flex-wrap gap-1.5">
-                      {data.antonyms.map((s, i) => (
-                        <button key={i} onClick={() => playFrenchAudio(s)}
-                          className="px-2.5 py-1 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded-lg text-xs font-medium transition-colors active:scale-95">
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {data.confusingWords?.length > 0 && (
-                  <div className="bg-orange-50 rounded-2xl p-4 border border-orange-100 sm:col-span-2">
-                    <h4 className="text-[10px] font-bold text-orange-600 uppercase tracking-widest mb-2">⚠ Easily Confused</h4>
-                    <div className="flex flex-wrap gap-1.5">
-                      {data.confusingWords.map((s, i) => (
-                        <button key={i} onClick={() => playFrenchAudio(s)}
-                          className="px-2.5 py-1 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-lg text-xs font-medium transition-colors active:scale-95">
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                  ))}
+                </div>
               </div>
             )}
           </>

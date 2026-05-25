@@ -9,3 +9,9 @@ coverage/
 *.msi
 test_*.mjs
 test-*.ts
+ngrok-bin/
+.agents/
+output.json
+metadata.json
+skills-lock.json
+updateTCF.md

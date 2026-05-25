@@ -5,12 +5,13 @@ import { DictationPractice } from './DictationPractice';
 
 interface ListeningTabProps {
   playAudio: (text: string, rate?: number) => void;
+  playWordAudio: (text: string, rate?: number) => void;
   isSpeaking: boolean;
 }
 
 type ListeningPhase = 'exam' | 'practice';
 
-export const ListeningTab: React.FC<ListeningTabProps> = ({ playAudio, isSpeaking }) => {
+export const ListeningTab: React.FC<ListeningTabProps> = ({ playAudio, playWordAudio, isSpeaking }) => {
   const [phase, setPhase] = useState<ListeningPhase>('practice');
   const [selectedLevel, setSelectedLevel] = useState<string>('B1');
   const [selectedExam, setSelectedExam] = useState<any>(null);
@@ -99,7 +100,7 @@ export const ListeningTab: React.FC<ListeningTabProps> = ({ playAudio, isSpeakin
             <PhaseToggle />
           </div>
         </div>
-        <DictationPractice playAudio={playAudio} isSpeaking={isSpeaking} />
+        <DictationPractice playAudio={playAudio} playWordAudio={playWordAudio} isSpeaking={isSpeaking} />
       </div>
     );
   }

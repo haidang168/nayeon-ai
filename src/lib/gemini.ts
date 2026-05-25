@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 
 interface KeyStatus {
   key: string;
@@ -49,8 +49,8 @@ const createAiCallWrapper = (methodName: 'generateContent' | 'generateContentStr
       
       // Fallback to a lighter model on the 3rd retry
       if (i === 3 && currentConfig.model === "gemini-2.5-flash") {
-        console.warn(`Retried 3 times, falling back to gemini-1.5-flash to improve success rate.`);
-        currentConfig = { ...currentConfig, model: "gemini-1.5-flash" };
+        console.warn(`Retried 3 times, falling back to gemini-3.1-flash-lite-preview to improve success rate.`);
+        currentConfig = { ...currentConfig, model: "gemini-3.1-flash-lite-preview" };
         args[0] = currentConfig;
       }
 
@@ -86,3 +86,72 @@ export const ai = {
     generateContentStream: createAiCallWrapper('generateContentStream')
   }
 } as any as GoogleGenAI;
+
+/**
+ * Staggered TTS: fire 1 request immediately, if no response in 2s fire a backup.
+ * Uses max 2 keys instead of 3 to save bandwidth and prevent network congestion.
+ */
+export async function generateTTSHedged(
+  text: string,
+  voiceName: string = 'Kore'
+): Promise<string | null> {
+  const now = Date.now();
+
+  const available = [...keys]
+    .filter(k => k.cooldownUntil < now)
+    .sort(() => Math.random() - 0.5);
+  const cooldown = [...keys]
+    .filter(k => k.cooldownUntil >= now)
+    .sort((a, b) => a.cooldownUntil - b.cooldownUntil);
+  const selected = [...available, ...cooldown].slice(0, Math.min(keys.length, 2));
+
+  if (selected.length === 0) return null;
+
+  const makeCall = (keyObj: KeyStatus) => {
+    const client = new GoogleGenAI({ apiKey: keyObj.key });
+    return client.models.generateContent({
+      model: 'gemini-2.5-flash-preview-tts',
+      contents: [{ parts: [{ text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName } },
+        },
+      },
+    }).then(r => r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null)
+      .catch((err: any) => {
+        const msg = err?.message?.toString() || '';
+        if (/503|429|Overloaded|TIMEOUT|fetch failed/i.test(msg)) {
+          markKeyAsFailed(keyObj.key);
+        }
+        throw err;
+      });
+  };
+
+  // Fire first request with 8s timeout
+  const first = Promise.race([
+    makeCall(selected[0]),
+    new Promise<never>((_, rej) => setTimeout(() => rej(new Error('TTS_TIMEOUT')), 8000))
+  ]);
+
+  if (selected.length < 2) {
+    try { return await first; } catch { return null; }
+  }
+
+  // Stagger: if first doesn't respond in 2s, fire backup
+  try {
+    return await Promise.race([
+      first,
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('STAGGER')), 2000))
+    ]);
+  } catch {
+    // First is slow or failed — fire backup in parallel
+    const second = Promise.race([
+      makeCall(selected[1]),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('TTS_TIMEOUT')), 8000))
+    ]);
+    try {
+      return await (Promise as any).any([first, second]);
+    } catch { return null; }
+  }
+}

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Check, Settings, BookHeart, Play, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Scenario } from '../types';
+import { DELF_CATEGORIES, getRandomTopic, getRandomScenario } from '../data/delfTopics';
 
 interface HeaderProps {
   streak: number;
@@ -218,8 +219,37 @@ export const Header: React.FC<HeaderProps> = ({
                       value={customTopic}
                       onChange={(e) => setCustomTopic(e.target.value)}
                       placeholder="Nhập chủ đề luyện giao tiếp với Nayeon..."
-                      className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl focus:outline-none focus:border-brand-primary text-[13px] font-medium transition-all min-h-[80px] resize-y"
+                      className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl focus:outline-none focus:border-brand-primary text-[13px] font-medium transition-all min-h-[60px] resize-y"
                     />
+                  </div>
+
+                  {/* Quick topic categories */}
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const topic = getRandomTopic();
+                        const scenario = getRandomScenario(topic);
+                        setCustomTopic(`${topic.titleFr}: ${scenario}`);
+                      }}
+                      className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors active:scale-95"
+                    >
+                      🎲 Ngẫu nhiên
+                    </button>
+                    {DELF_CATEGORIES.map(cat => (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => {
+                          const topic = getRandomTopic(cat.id);
+                          const scenario = getRandomScenario(topic);
+                          setCustomTopic(`${topic.titleFr}: ${scenario}`);
+                        }}
+                        className="text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-50 text-slate-500 hover:bg-blue-50 hover:text-blue-600 transition-colors active:scale-95"
+                      >
+                        {cat.emoji} {cat.labelVi}
+                      </button>
+                    ))}
                   </div>
 
                   {customTopic && (

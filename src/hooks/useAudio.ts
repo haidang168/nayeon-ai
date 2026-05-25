@@ -1,10 +1,10 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Modality } from "@google/genai";
-import { ai } from '../lib/gemini';
+import { get as idbGet, set as idbSet } from 'idb-keyval';
+import { generateTTSHedged } from '../lib/gemini';
 
 /** Max wait for the FIRST chunk before falling back to browser voice */
-const FIRST_CHUNK_TIMEOUT_MS = 4000;
-const CACHE_MAX_SIZE = 30;
+const FIRST_CHUNK_TIMEOUT_MS = 2500;
+const CACHE_MAX_SIZE = 50;
 
 /**
  * Split text into short sentence-level chunks for parallel TTS.
@@ -35,22 +35,11 @@ function splitIntoChunks(text: string): string[] {
 }
 
 /**
- * Generate TTS for a single chunk via Gemini TTS.
- * Model: gemini-2.5-flash-preview-tts — supports French natively.
+ * Generate TTS for a single chunk via hedged Gemini TTS.
+ * Fires request to 3 keys simultaneously, uses fastest response.
  */
 async function generateTTSChunk(text: string): Promise<Float32Array | null> {
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash-preview-tts",
-    contents: [{ parts: [{ text }] }],
-    config: {
-      responseModalities: [Modality.AUDIO],
-      speechConfig: {
-        voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
-      },
-    },
-  });
-
-  const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+  const base64Audio = await generateTTSHedged(text);
   if (!base64Audio) return null;
 
   const binaryString = atob(base64Audio);
@@ -72,6 +61,10 @@ export function useAudio() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Separate refs for word-level audio (non-canceling, doesn't interrupt main audio)
+  const wordSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const wordAbortRef = useRef<AbortController | null>(null);
 
   // LRU Audio Cache
   const audioCacheRef = useRef<Map<string, Float32Array>>(new Map());
@@ -117,16 +110,24 @@ export function useAudio() {
       if (firstKey) cache.delete(firstKey);
     }
     cache.set(key, data);
+    idbSet('audio_' + key, data).catch(() => {});
   }, []);
 
-  const getCachedAudio = useCallback((key: string): Float32Array | null => {
+  const getCachedAudio = useCallback(async (key: string): Promise<Float32Array | null> => {
     const cache = audioCacheRef.current;
-    const data = cache.get(key);
-    if (data) {
+    const memData = cache.get(key);
+    if (memData) {
       cache.delete(key);
-      cache.set(key, data); // Move to end (most recently used)
-      return data;
+      cache.set(key, memData); // Move to end (most recently used)
+      return memData;
     }
+    try {
+      const idbData = await idbGet<Float32Array>('audio_' + key);
+      if (idbData) {
+        cache.set(key, idbData);
+        return idbData;
+      }
+    } catch (e) {}
     return null;
   }, []);
 
@@ -202,9 +203,9 @@ export function useAudio() {
       const chunks = splitIntoChunks(text);
 
       // Check cache first, then fire TTS for uncached chunks
-      const ttsPromises = chunks.map(chunk => {
-        const cached = getCachedAudio(chunk);
-        if (cached) return Promise.resolve(cached);
+      const ttsPromises = chunks.map(async chunk => {
+        const cached = await getCachedAudio(chunk);
+        if (cached) return cached;
         return generateTTSChunk(chunk);
       });
 
@@ -250,6 +251,39 @@ export function useAudio() {
     }
   }, [getAudioCtx, playBuffer, playWithBrowserVoice, getCachedAudio, cacheAudio]);
 
+  // --- Lightweight word audio (does NOT cancel main playback/YouTube) ---
+  const playWordAudio = useCallback(async (text: string, rate: number = 1.0) => {
+    if (!text) return;
+
+    // Cancel only previous word audio
+    if (wordAbortRef.current) wordAbortRef.current.abort();
+    if (wordSourceRef.current) { try { wordSourceRef.current.stop(); } catch (e) {} }
+
+    const abort = new AbortController();
+    wordAbortRef.current = abort;
+
+    try {
+      const ctx = await getAudioCtx();
+      const cached = await getCachedAudio(text);
+      const samples = cached || await generateTTSChunk(text);
+      if (abort.signal.aborted || !samples) return;
+      cacheAudio(text, samples);
+
+      const audioBuffer = ctx.createBuffer(1, samples.length, 24000);
+      audioBuffer.getChannelData(0).set(samples);
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.playbackRate.value = rate;
+      if (gainNodeRef.current) { source.connect(gainNodeRef.current); }
+      else { source.connect(ctx.destination); }
+      wordSourceRef.current = source;
+      source.start(0);
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return;
+      // Silent fail for word audio — not critical
+    }
+  }, [getAudioCtx, getCachedAudio, cacheAudio]);
+
   // --- Streaming Audio API (for streaming chat responses) ---
 
   /** Call when streaming begins. Cancels any previous audio and prepares the queue. */
@@ -281,9 +315,10 @@ export function useAudio() {
     }
     lastQueuedRef.current = trimmed;
 
-    // Check cache first
-    const cached = getCachedAudio(trimmed);
-    const ttsPromise = cached ? Promise.resolve(cached) : generateTTSChunk(trimmed);
+    // Check cache first (async), but start TTS immediately if not cached
+    const ttsPromise = getCachedAudio(trimmed).then(cached => {
+      return cached ? cached : generateTTSChunk(trimmed);
+    });
 
     playQueueRef.current = playQueueRef.current.then(async () => {
       if (abortRef.current?.signal.aborted) return;
@@ -357,6 +392,7 @@ export function useAudio() {
   return {
     isSpeaking,
     playAudio,
+    playWordAudio,
     primeSpeech,
     startStreamingAudio,
     queueSentence,

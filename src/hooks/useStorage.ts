@@ -71,10 +71,19 @@ export function useStorage() {
     initData();
   }, []);
 
-  const saveFavorites = (favs: FavoriteItem[]) => {
-    setFavorites(favs);
-    localStorage.setItem('favorites', JSON.stringify(favs));
-    syncDataToCloud({ favorites: favs });
+  const saveFavorites = (favsOrUpdater: FavoriteItem[] | ((prev: FavoriteItem[]) => FavoriteItem[])) => {
+    if (typeof favsOrUpdater === 'function') {
+      setFavorites(prev => {
+        const newFavs = favsOrUpdater(prev);
+        localStorage.setItem('favorites', JSON.stringify(newFavs));
+        syncDataToCloud({ favorites: newFavs });
+        return newFavs;
+      });
+    } else {
+      setFavorites(favsOrUpdater);
+      localStorage.setItem('favorites', JSON.stringify(favsOrUpdater));
+      syncDataToCloud({ favorites: favsOrUpdater });
+    }
   };
 
   const savePastConversations = (past: SessionData[]) => {

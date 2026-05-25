@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  ArrowLeft, Play, Send, Turtle, Mic, MicOff,
+  ArrowLeft, Play, Send, Mic, MicOff,
   CheckCircle2, XCircle, AlertTriangle, Youtube, Link, Trash2, Plus,
-  Brain, Loader2, Volume2, Eye, ChevronRight, RotateCcw, ChevronDown
+  Loader2, Volume2, Eye, ChevronRight, RotateCcw, ChevronDown, Gauge, Brain, Search
 } from 'lucide-react';
 import { useDictation, DiffWord } from '../hooks/useDictation';
 import { useVoiceRecognition } from '../hooks/useVoiceRecognition';
@@ -11,16 +11,23 @@ import YouTube, { YouTubePlayer } from 'react-youtube';
 
 interface DictationPracticeProps {
   playAudio: (text: string, rate?: number) => void;
+  playWordAudio?: (text: string, rate?: number) => void;
   isSpeaking: boolean;
 }
 
 type SentenceStep = 'listen' | 'write' | 'write-result' | 'cloze' | 'cloze-result' | 'speak' | 'speak-result' | 'done';
 
-export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio, isSpeaking }) => {
+export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio, playWordAudio, isSpeaking }) => {
   const d = useDictation();
   const [step, setStep] = useState<SentenceStep>('listen');
   const [shadowText, setShadowText] = useState('');
   const [showHints, setShowHints] = useState(false);
+
+  // Speed control
+  const playbackRates = [0.5, 0.75, 1.0, 1.25, 1.5];
+  const [speedIndex, setSpeedIndex] = useState(2); // default 1.0x
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const currentRate = playbackRates[speedIndex];
 
   const voice = useVoiceRecognition((transcript) => {
     setShadowText(prev => prev ? prev + ' ' + transcript : transcript);
@@ -29,13 +36,16 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
 
   const ytPlayerRef = useRef<YouTubePlayer | null>(null);
   const [isPlayingVideo, setIsPlayingVideo] = useState(false);
+  const [isVideoBlocked, setIsVideoBlocked] = useState(false);
   const videoSrcId = d.currentSentence?.videoId || d.currentLesson?.videoId;
 
   const playSentenceVideo = () => {
     if (ytPlayerRef.current && d.currentSentence) {
-      ytPlayerRef.current.seekTo(d.currentSentence.startTime, true);
+      ytPlayerRef.current.setPlaybackRate(currentRate);
       ytPlayerRef.current.playVideo();
+      ytPlayerRef.current.seekTo(d.currentSentence.startTime, true);
       setIsPlayingVideo(true);
+      setIsVideoBlocked(false);
     }
   };
 
@@ -60,7 +70,7 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
         }
         // If ytPlayerRef is not ready yet, onPlayerReady will handle it.
       } else {
-        setTimeout(() => playAudio(d.currentSentence!.text, d.isSlowSpeed ? 0.75 : 1.0), 400);
+        setTimeout(() => playAudio(d.currentSentence!.text, currentRate), 400);
       }
     }
   }, [d.currentIndex, d.currentSentence, d.phase, videoSrcId]);
@@ -84,9 +94,29 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
 
   const onPlayerReady = (event: { target: YouTubePlayer }) => {
     ytPlayerRef.current = event.target;
-    if (d.isSlowSpeed) event.target.setPlaybackRate(0.75);
-    if (step === 'write') {
+    event.target.setPlaybackRate(currentRate);
+    if (step === 'write' || step === 'cloze') {
       playSentenceVideo();
+      // Fallback for iOS Safari which blocks autoplay without user interaction
+      setTimeout(() => {
+        if (ytPlayerRef.current) {
+          const state = ytPlayerRef.current.getPlayerState();
+          // -1: unstarted, 2: paused, 5: cued
+          if (state === -1 || state === 5 || state === 2) {
+            setIsVideoBlocked(true);
+            setIsPlayingVideo(false);
+          }
+        }
+      }, 800);
+    }
+  };
+
+  const onPlayerStateChange = (event: { target: YouTubePlayer, data: number }) => {
+    if (event.data === 1) { // Playing
+      setIsVideoBlocked(false);
+      setIsPlayingVideo(true);
+    } else if (event.data === 2 || event.data === 0) { // Paused or Ended
+      setIsPlayingVideo(false);
     }
   };
 
@@ -96,7 +126,16 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
         playSentenceVideo();
       }
     } else if (d.currentSentence) {
-      playAudio(d.currentSentence.text, d.isSlowSpeed ? 0.75 : 1.0);
+      playAudio(d.currentSentence.text, currentRate);
+    }
+  };
+
+  const handleSpeedChange = (idx: number) => {
+    setSpeedIndex(idx);
+    setShowSpeedMenu(false);
+    const rate = playbackRates[idx];
+    if (ytPlayerRef.current) {
+      ytPlayerRef.current.setPlaybackRate(rate);
     }
   };
 
@@ -155,7 +194,7 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
 
   const handleWordClick = (word: string) => {
     const cleanWord = word.replace(/[.,!?;:'"()]/g, '');
-    if (cleanWord) playAudio(cleanWord, d.isSlowSpeed ? 0.75 : 1.0);
+    if (cleanWord) playAudio(cleanWord, currentRate);
   };
 
   // ─── BROWSE PHASE ───
@@ -248,14 +287,30 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
                 <Link size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" />
                 <input type="text" value={d.youtubeUrl} onChange={e => d.setYoutubeUrl(e.target.value)}
                   placeholder="Dán link YouTube..." onKeyDown={e => { if (e.key === 'Enter') d.importFromYouTube(); }}
-                  className="w-full pl-8 pr-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100" />
+                  disabled={d.isImporting}
+                  className="w-full pl-8 pr-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100 disabled:opacity-50" />
               </div>
-              <button onClick={d.importFromYouTube} disabled={d.isImporting || !d.youtubeUrl.trim()}
+              <button onClick={() => d.importFromYouTube()} disabled={d.isImporting || !d.youtubeUrl.trim()}
                 className="px-3 py-2.5 bg-red-500 text-white font-bold rounded-xl text-sm disabled:opacity-50 active:scale-95 flex items-center gap-1 shrink-0">
                 {d.isImporting ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
                 <span className="hidden sm:inline">Lấy bài</span>
               </button>
+              <button onClick={() => d.importFromYouTube(true)} disabled={d.isImporting || !d.youtubeUrl.trim()}
+                className="px-3 py-2.5 bg-slate-100 text-slate-600 font-bold rounded-xl text-sm disabled:opacity-50 active:scale-95 flex items-center gap-1 shrink-0 hover:bg-slate-200"
+                title="Xem trước danh sách câu trước khi luyện">
+                <Search size={14} />
+                <span className="hidden sm:inline">Xem trước</span>
+              </button>
             </div>
+
+            {/* Progress indicator */}
+            {d.isImporting && d.importProgress && (
+              <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
+                className="mt-3 flex items-center gap-2 bg-blue-50 text-blue-700 px-3 py-2.5 rounded-xl text-sm font-medium">
+                <Loader2 size={14} className="animate-spin shrink-0" />
+                <span>{d.importProgress}</span>
+              </motion.div>
+            )}
 
             {d.importError && (
               <p className="mt-2.5 text-sm text-red-500 bg-red-50 p-2.5 rounded-xl">{d.importError}</p>
@@ -272,28 +327,33 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
                         <p className="text-xs text-slate-400 mt-0.5">{d.importPreview.sentences.length} câu</p>
                       </div>
                     </div>
-                    <div className="max-h-60 overflow-y-auto space-y-1 mb-3 pr-1 custom-scrollbar">
-                      <p className="text-xs text-slate-500 mb-2 font-medium">🤖 AI đã chọn <strong>{d.selectedSentenceIds.size}</strong> câu chứa collocations/chunks quan trọng. Bạn có thể chỉnh lại:</p>
-                      {d.importPreview.sentences.map((s, i) => {
-                        const isSelected = d.selectedSentenceIds.has(s.id);
-                        return (
-                          <div key={s.id} 
-                            onClick={() => d.toggleSentenceSelection(s.id)}
-                            className={`flex gap-2 p-2 rounded-lg cursor-pointer border transition-colors ${
-                              isSelected ? 'bg-blue-50 border-blue-200' : 'bg-white border-transparent hover:bg-slate-100'
-                            }`}>
-                            <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 mt-0.5 ${
-                              isSelected ? 'bg-[#1a56db] border-[#1a56db] text-white' : 'border-slate-300'
-                            }`}>
-                              {isSelected && <CheckCircle2 size={12} />}
+                    <div className="max-h-60 overflow-y-auto mb-3 pr-1 custom-scrollbar">
+                      <p className="text-xs text-slate-500 mb-2 font-medium">🤖 AI đã chọn <strong>{d.selectedSentenceIds.size}</strong> câu chứa collocations/chunks quan trọng. Nhấp vào câu để chọn/bỏ chọn:</p>
+                      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                        {d.importPreview.sentences.map((s, i) => {
+                          const isSelected = d.selectedSentenceIds.has(s.id);
+                          const isLast = i === d.importPreview.sentences.length - 1;
+                          return (
+                            <div key={s.id} 
+                              onClick={() => d.toggleSentenceSelection(s.id)}
+                              className={`group relative flex cursor-pointer transition-colors ${
+                                isSelected ? 'bg-blue-50/50' : 'hover:bg-slate-50'
+                              } ${!isLast ? 'border-b border-dashed border-slate-100' : ''}`}>
+                              {/* Accent bar */}
+                              <div className={`absolute left-0 top-0 bottom-0 w-1 transition-colors ${
+                                isSelected ? 'bg-[#1a56db]' : 'bg-transparent group-hover:bg-slate-200'
+                              }`} />
+                              
+                              <div className="py-2.5 px-4 flex-1">
+                                <p className={`text-[13px] leading-relaxed ${isSelected ? 'text-[#1e3a8a] font-medium' : 'text-slate-500'}`}>
+                                  <span className={`font-mono text-[10px] mr-2 ${isSelected ? 'text-blue-400' : 'text-slate-400'}`}>{i + 1}.</span>
+                                  {s.text}
+                                </p>
+                              </div>
                             </div>
-                            <p className={`text-xs flex-1 ${isSelected ? 'text-slate-800' : 'text-slate-400'}`}>
-                              <span className="font-bold mr-1 opacity-50">{i + 1}.</span>
-                              {s.text}
-                            </p>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
+                      </div>
                     </div>
                     <div className="flex gap-2">
                       <button onClick={d.confirmImport} disabled={d.selectedSentenceIds.size === 0}
@@ -394,7 +454,7 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
 
       {/* Main content */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-lg mx-auto p-4 space-y-4">
+        <div className="max-w-2xl mx-auto px-3 py-3 sm:p-5 space-y-4 sm:space-y-6">
 
           {/* Step indicator */}
           <div className="flex items-center justify-center gap-1 text-xs">
@@ -403,42 +463,72 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
             <StepDot active={step === 'speak' || step === 'speak-result'} done={step === 'done'} label="🎙️ Nói" />
           </div>
 
-          {/* Audio controls - always visible */}
-          <div className="flex items-center justify-center gap-2.5">
+          {/* Audio controls - mobile-optimized compact bar */}
+          <div className="flex items-center justify-center gap-1.5 flex-wrap">
             <button onClick={handleReplay} disabled={isSpeaking || isPlayingVideo}
-              className="flex items-center gap-2 px-5 py-2.5 bg-[#1a56db] text-white font-bold rounded-2xl text-sm active:scale-95 shadow-md disabled:opacity-50">
+              className="flex items-center gap-2 px-5 py-2.5 bg-[#1a56db] text-white font-bold rounded-xl text-sm sm:text-base active:scale-95 shadow-md disabled:opacity-50">
               {(isSpeaking || isPlayingVideo) ? <Loader2 size={16} className="animate-spin" /> : <Volume2 size={16} />}
               {(isSpeaking || isPlayingVideo) ? 'Đang phát...' : '▶ Nghe lại'}
             </button>
-            {videoSrcId && (
-              <button onClick={() => playAudio(d.currentSentence!.text, d.isSlowSpeed ? 0.75 : 1.0)} disabled={isSpeaking || isPlayingVideo}
-                className="flex items-center gap-1 px-3 py-2.5 rounded-2xl text-sm font-bold active:scale-95 border bg-white text-blue-500 border-blue-200 hover:bg-blue-50">
-                <Brain size={14} /> Giọng AI
+
+            {/* Speed dropdown */}
+            <div className="relative">
+              <button onClick={() => setShowSpeedMenu(!showSpeedMenu)}
+                className={`flex items-center gap-1 px-3 py-2 rounded-xl text-[13px] font-bold active:scale-95 border transition-colors ${
+                  currentRate !== 1.0 ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-white text-slate-500 border-slate-200'
+                }`}>
+                <Gauge size={13} /> {currentRate}x
               </button>
-            )}
-            <button onClick={() => {
-                const newSlow = !d.isSlowSpeed;
-                d.setIsSlowSpeed(newSlow);
-                if (ytPlayerRef.current) {
-                  ytPlayerRef.current.setPlaybackRate(newSlow ? 0.75 : 1.0);
-                }
-              }}
-              className={`flex items-center gap-1 px-3 py-2.5 rounded-2xl text-sm font-bold active:scale-95 border ${
-                d.isSlowSpeed ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-white text-slate-500 border-slate-200'
-              }`}>
-              <Turtle size={14} /> Chậm
-            </button>
+              {showSpeedMenu && (
+                <>
+                  <div className="fixed inset-0 z-20" onClick={() => setShowSpeedMenu(false)} />
+                  <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
+                    className="absolute top-full left-0 mt-1 bg-white rounded-xl border border-slate-200 shadow-lg z-30 overflow-hidden min-w-[100px]">
+                    {playbackRates.map((rate, idx) => (
+                      <button key={rate} onClick={() => handleSpeedChange(idx)}
+                        className={`w-full px-4 py-2 text-left text-[13px] font-bold transition-colors ${
+                          idx === speedIndex ? 'bg-[#1a56db] text-white' : 'text-slate-600 hover:bg-slate-50 active:bg-slate-100'
+                        }`}>
+                        {rate}x {rate === 1.0 && '(Mặc định)'}
+                      </button>
+                    ))}
+                  </motion.div>
+                </>
+              )}
+            </div>
+
             <button onClick={() => d.setAutoLoop(!d.autoLoop)}
-              className={`flex items-center gap-1 px-3 py-2.5 rounded-2xl text-sm font-bold active:scale-95 border ${
+              className={`flex items-center gap-1 px-3 py-2 rounded-xl text-[13px] font-bold active:scale-95 border transition-colors ${
                 d.autoLoop ? 'bg-green-100 text-green-700 border-green-200' : 'bg-white text-slate-500 border-slate-200'
               }`}>
-              🔁 Lặp ({d.autoLoop ? 'Bật' : 'Tắt'})
+              🔁 {d.autoLoop ? 'Bật' : 'Tắt'}
             </button>
           </div>
 
-          {/* YouTube Video Player */}
+          {/* YouTube Video Player — tap to replay */}
           {videoSrcId && (
-            <div className="rounded-2xl overflow-hidden shadow-sm aspect-video bg-black relative">
+            <div
+              className="rounded-2xl overflow-hidden shadow-sm aspect-video bg-black relative cursor-pointer group"
+              onClick={() => { if (!isVideoBlocked) handleReplay(); }}
+            >
+              {/* Tap-to-replay overlay (visible when video is paused/idle, not when blocked) */}
+              {!isVideoBlocked && !isPlayingVideo && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/20 opacity-0 group-active:opacity-100 transition-opacity pointer-events-none">
+                  <div className="p-3 bg-white/20 backdrop-blur-sm rounded-full">
+                    <Play size={20} className="text-white ml-0.5" fill="currentColor" />
+                  </div>
+                </div>
+              )}
+              {/* iOS autoplay blocked overlay */}
+              {isVideoBlocked && (
+                <div className="absolute inset-0 bg-slate-900/70 z-10 flex flex-col items-center justify-center text-white p-4">
+                  <button onClick={handleReplay} className="p-4 bg-[#1a56db] rounded-full shadow-lg mb-3 animate-pulse hover:bg-blue-600 transition-colors">
+                    <Play size={24} fill="currentColor" className="ml-1" />
+                  </button>
+                  <p className="text-sm font-bold text-center">Bấm để phát video</p>
+                  <p className="text-[10px] text-slate-300 mt-1 opacity-80">(Trình duyệt chặn tự động phát)</p>
+                </div>
+              )}
               <YouTube
                 videoId={videoSrcId}
                 opts={{
@@ -452,10 +542,12 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
                     showinfo: 0,
                     playsinline: 1,
                     fs: 0,
-                    iv_load_policy: 3
+                    iv_load_policy: 3,
+                    origin: window.location.origin
                   },
                 }}
                 onReady={onPlayerReady}
+                onStateChange={onPlayerStateChange}
                 className="absolute inset-0 w-full h-full pointer-events-none"
               />
             </div>
@@ -485,7 +577,7 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
                   }
                 }}
                 placeholder="Gõ những gì bạn nghe... (Tab: Nghe lại, Enter: Nộp)"
-                className="w-full p-4 pt-6 text-base leading-relaxed resize-none rounded-2xl border border-slate-200 shadow-sm focus:outline-none focus:border-[#1a56db] focus:ring-2 focus:ring-blue-100 min-h-[110px] bg-white"
+                className="w-full p-5 pt-8 text-lg sm:text-xl leading-relaxed resize-none rounded-2xl border border-slate-200 shadow-sm focus:outline-none focus:border-[#1a56db] focus:ring-2 focus:ring-blue-100 min-h-[140px] bg-white"
                 autoFocus />
             </motion.div>
           )}
@@ -503,7 +595,7 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
                     💡 Gợi ý
                   </button>
                 </div>
-                <p className="text-base leading-[2.2] text-slate-700">
+                <p className="text-lg sm:text-xl leading-[2.5] text-slate-700">
                   {d.currentCloze.display.split(/(___\d+___[.,!?;:'"()]*)/g).map((part, i) => {
                     const blankMatch = part.match(/___((\d+))___(.*)/);
                     if (blankMatch) {
@@ -517,7 +609,7 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
                             value={d.currentCloze!.userAnswers[blankIdx] || ''}
                             onChange={e => d.setClozeAnswer(blankIdx, e.target.value)}
                             placeholder={hintChar}
-                            className="inline-block w-24 sm:w-28 mx-1 px-2 py-1 text-center text-base font-bold border-b-2 border-amber-400 bg-amber-50 rounded-t-lg focus:outline-none focus:border-amber-500 focus:bg-amber-100 transition-colors"
+                            className="inline-block w-28 sm:w-40 mx-1 px-2 py-1.5 text-center text-lg sm:text-xl font-bold border-b-2 border-amber-400 bg-amber-50 rounded-t-lg focus:outline-none focus:border-amber-500 focus:bg-amber-100 transition-colors"
                             autoFocus={blankIdx === 0}
                           />
                           {trailing && <span>{trailing} </span>}
@@ -562,7 +654,7 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
 
               <div className="bg-green-50 rounded-2xl border border-green-200 p-3.5 shadow-sm">
                 <p className="text-xs font-bold text-green-600 uppercase tracking-wider mb-1.5">Câu đầy đủ:</p>
-                <p className="text-base text-green-800 leading-relaxed font-medium">{d.currentSentence?.text}</p>
+                <p className="text-lg sm:text-xl text-green-800 leading-relaxed font-medium">{d.currentSentence?.text}</p>
               </div>
             </motion.div>
           )}
@@ -582,7 +674,7 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
               {/* User input */}
               <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-sm">
                 <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">Bạn viết:</p>
-                <p className="text-base leading-relaxed">
+                <p className="text-lg sm:text-xl leading-relaxed">
                   {d.lastDiff.userDiff.map((w, i) => (
                     <span key={i} className={w.status === 'correct' ? 'text-green-600' : 'text-red-500 line-through decoration-red-300'}>{w.word} </span>
                   ))}
@@ -595,7 +687,7 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
                   Đáp án:
                   <span className="text-[10px] normal-case opacity-70">Nhấn vào từ để nghe phát âm</span>
                 </p>
-                <p className="text-base leading-relaxed">
+                <p className="text-lg sm:text-xl leading-relaxed">
                   {d.lastDiff.correctDiff.map((w, i) => (
                     <span key={i} 
                       onClick={() => handleWordClick(w.word)}
@@ -640,7 +732,7 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
                       setShadowText(e.target.value);
                       d.setShadowingTranscript(e.target.value);
                     }}
-                    className="w-full text-base text-slate-700 leading-relaxed resize-none focus:outline-none bg-transparent min-h-[80px]"
+                    className="w-full text-lg sm:text-xl text-slate-700 leading-relaxed resize-none focus:outline-none bg-transparent min-h-[120px]"
                     placeholder={voice.isRecording ? '🔴 Đang thu âm...' : voice.isProcessing ? '⏳ Đang nhận dạng...' : 'Ghi âm hoặc gõ lại câu bạn vừa đọc...'}
                   />
                 </div>
@@ -660,14 +752,14 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
               {shadowText && (
                 <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-sm">
                   <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">Bạn đã nói:</p>
-                  <p className="text-base text-slate-700 leading-relaxed">{shadowText}</p>
+                  <p className="text-lg sm:text-xl text-slate-700 leading-relaxed">{shadowText}</p>
                 </div>
               )}
 
               {/* Answer */}
               <div className="bg-green-50 rounded-2xl border border-green-200 p-3.5 shadow-sm">
                 <p className="text-xs font-bold text-green-600 uppercase tracking-wider mb-1.5">Đáp án:</p>
-                <p className="text-base text-green-800 leading-relaxed font-medium">{d.currentSentence?.text}</p>
+                <p className="text-lg sm:text-xl text-green-800 leading-relaxed font-medium">{d.currentSentence?.text}</p>
               </div>
 
               {/* Retry speak */}
@@ -697,45 +789,45 @@ export const DictationPractice: React.FC<DictationPracticeProps> = ({ playAudio,
       {/* ─── Bottom action bar (mobile-friendly) ─── */}
       {step !== 'done' && (
         <div className="px-4 py-3 bg-white border-t border-slate-100 shrink-0 safe-area-bottom">
-          <div className="max-w-lg mx-auto flex gap-2">
+          <div className="max-w-2xl mx-auto flex gap-2 sm:gap-3">
             {step === 'write' && (
               <button onClick={handleCheck} disabled={!d.userInput.trim()}
-                className="flex-1 py-3.5 bg-[#1a56db] text-white font-bold rounded-2xl text-sm active:scale-95 shadow-md disabled:opacity-40 flex items-center justify-center gap-2">
-                <Send size={15} /> Kiểm tra
+                className="flex-1 py-4 sm:py-5 bg-[#1a56db] text-white font-bold rounded-2xl text-base sm:text-lg active:scale-95 shadow-md disabled:opacity-40 flex items-center justify-center gap-2">
+                <Send size={18} /> Kiểm tra
               </button>
             )}
 
             {step === 'cloze' && (
               <button onClick={handleClozeCheck} disabled={!d.currentCloze?.userAnswers.some(a => a.trim())}
-                className="flex-1 py-3.5 bg-amber-500 text-white font-bold rounded-2xl text-sm active:scale-95 shadow-md disabled:opacity-40 flex items-center justify-center gap-2">
-                <Send size={15} /> Kiểm tra
+                className="flex-1 py-4 sm:py-5 bg-amber-500 text-white font-bold rounded-2xl text-base sm:text-lg active:scale-95 shadow-md disabled:opacity-40 flex items-center justify-center gap-2">
+                <Send size={18} /> Kiểm tra
               </button>
             )}
 
             {(step === 'write-result' || step === 'cloze-result') && (
               <>
                 <button onClick={handleStartSpeak}
-                  className="flex-1 py-3.5 bg-green-500 text-white font-bold rounded-2xl text-sm active:scale-95 shadow-md flex items-center justify-center gap-2">
-                  <Mic size={15} /> Tiếp: Nói lại
+                  className="flex-1 py-4 sm:py-5 bg-green-500 text-white font-bold rounded-2xl text-base sm:text-lg active:scale-95 shadow-md flex items-center justify-center gap-2">
+                  <Mic size={18} /> Tiếp: Nói lại
                 </button>
                 <button onClick={handleNext}
-                  className="flex-1 py-3.5 bg-slate-200 text-slate-700 font-bold rounded-2xl text-sm active:scale-95 shadow-md flex items-center justify-center gap-1.5">
-                  Bỏ qua Nói <ChevronRight size={15} />
+                  className="flex-1 py-4 sm:py-5 bg-slate-200 text-slate-700 font-bold rounded-2xl text-base sm:text-lg active:scale-95 shadow-md flex items-center justify-center gap-1.5">
+                  Bỏ qua Nói <ChevronRight size={18} />
                 </button>
               </>
             )}
 
             {step === 'speak' && (
               <button onClick={handleRevealSpeak} disabled={!shadowText && !voice.isProcessing}
-                className="flex-1 py-3.5 bg-[#1a56db] text-white font-bold rounded-2xl text-sm active:scale-95 shadow-md disabled:opacity-40 flex items-center justify-center gap-2">
-                <Eye size={15} /> Xem đáp án
+                className="flex-1 py-4 sm:py-5 bg-[#1a56db] text-white font-bold rounded-2xl text-base sm:text-lg active:scale-95 shadow-md disabled:opacity-40 flex items-center justify-center gap-2">
+                <Eye size={18} /> Xem đáp án
               </button>
             )}
 
             {step === 'speak-result' && (
               <button onClick={handleNext}
-                className="flex-1 py-3.5 bg-green-500 text-white font-bold rounded-2xl text-sm active:scale-95 shadow-md flex items-center justify-center gap-2">
-                {d.isLastSentence ? '🏆 Xem kết quả' : <>Câu tiếp <ChevronRight size={15} /></>}
+                className="flex-1 py-4 sm:py-5 bg-green-500 text-white font-bold rounded-2xl text-base sm:text-lg active:scale-95 shadow-md flex items-center justify-center gap-2">
+                {d.isLastSentence ? '🏆 Xem kết quả' : <>Câu tiếp <ChevronRight size={18} /></>}
               </button>
             )}
           </div>

@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { BookOpen, ArrowLeft, Send, CheckCircle2, XCircle, PlayCircle, FileText, Loader2 } from 'lucide-react';
+import { BookOpen, ArrowLeft, Send, CheckCircle2, XCircle, PlayCircle, FileText, Loader2, Sparkles } from 'lucide-react';
 import { useExams } from '../hooks/useExams';
 import { useStats } from '../hooks/useStats';
+import { useAIExamGenerator } from '../hooks/useAIExamGenerator';
+import { AIExamGeneratorPanel } from './AIExamGeneratorPanel';
 
 export const ReadingTab = () => {
   const stats = useStats();
@@ -10,6 +12,10 @@ export const ReadingTab = () => {
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [isSubmitted, setIsSubmitted] = useState(false);
   const { exams: readingExamsData, isLoading } = useExams('reading');
+  const aiGen = useAIExamGenerator();
+
+  // AI-generated exams stored in session
+  const [aiExams, setAiExams] = useState<any[]>([]);
 
   const handleSelectExam = (exam: any) => {
     setSelectedExam(exam);
@@ -39,6 +45,15 @@ export const ReadingTab = () => {
     stats.addCompletedLesson();
   };
 
+  const handleAIGenerate = async (level: string, topic: string) => {
+    const exam = await aiGen.generateReadingExam(level, topic);
+    if (exam) {
+      setAiExams(prev => [exam, ...prev]);
+      // Auto-open the generated exam
+      handleSelectExam(exam);
+    }
+  };
+
   // Tính điểm
   const calculateScore = () => {
     if (!selectedExam) return { correct: 0, total: 0 };
@@ -49,9 +64,10 @@ export const ReadingTab = () => {
     return { correct, total: selectedExam.questions.length };
   };
 
-  // Filter exams based on selected level
-  const filteredExams = readingExamsData.filter((exam: any) => exam.level === selectedLevel);
-  const availableLevels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'].filter(lvl => readingExamsData.some((e: any) => e.level === lvl));
+  // Combine AI exams + static exams, filter by level
+  const allExams = [...aiExams, ...readingExamsData];
+  const filteredExams = allExams.filter((exam: any) => exam.level === selectedLevel);
+  const ALL_LEVELS = ['A1', 'A2', 'B1', 'B2'];
 
   if (!selectedExam) {
     return (
@@ -59,8 +75,8 @@ export const ReadingTab = () => {
         <div className="p-4 sm:p-8 max-w-5xl mx-auto w-full">
           <h2 className="text-2xl sm:text-3xl font-bold text-slate-800 mb-6 font-serif">Đề thi DELF {selectedLevel} (Đọc hiểu)</h2>
           
-          <div className="flex gap-2 sm:gap-4 mb-8 overflow-x-auto pb-2 scrollbar-hide">
-            {availableLevels.map(lvl => (
+          <div className="flex gap-2 sm:gap-4 mb-6 overflow-x-auto pb-2 scrollbar-hide">
+            {ALL_LEVELS.map(lvl => (
               <button
                 key={lvl}
                 onClick={() => setSelectedLevel(lvl)}
@@ -76,6 +92,15 @@ export const ReadingTab = () => {
             ))}
           </div>
 
+          {/* AI Generator Panel */}
+          <AIExamGeneratorPanel
+            type="reading"
+            selectedLevel={selectedLevel}
+            isGenerating={aiGen.isGenerating}
+            genError={aiGen.genError}
+            onGenerate={handleAIGenerate}
+          />
+
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6">
             {isLoading ? (
               <div className="col-span-full py-12 flex flex-col items-center justify-center text-slate-400 gap-2">
@@ -84,13 +109,22 @@ export const ReadingTab = () => {
               </div>
             ) : filteredExams.length === 0 ? (
               <div className="col-span-full py-12 text-center text-slate-400">
-                Chưa có đề thi nào cho trình độ này. Bạn có thể tự tạo trong Admin.
+                Chưa có đề thi nào cho trình độ này. Hãy thử tạo đề bằng AI ở trên!
               </div>
             ) : (
               filteredExams.map((exam: any) => (
-                <div key={exam.id} className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 flex flex-col justify-between hover:shadow-lg transition-all min-h-[160px]">
+                <div key={exam.id} className={`bg-white rounded-2xl border p-5 sm:p-6 flex flex-col justify-between hover:shadow-lg transition-all min-h-[160px] ${
+                  exam.id.startsWith('ai-') ? 'border-emerald-200 ring-1 ring-emerald-100' : 'border-slate-200'
+                }`}>
                   <div>
-                    <h3 className="font-bold text-slate-800 text-lg mb-2 line-clamp-2">{exam.title}</h3>
+                    <div className="flex items-center gap-2 mb-2">
+                      {exam.id.startsWith('ai-') && (
+                        <span className="flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-600 rounded-md text-[10px] font-bold uppercase tracking-wider">
+                          <Sparkles size={10} /> AI
+                        </span>
+                      )}
+                      <h3 className="font-bold text-slate-800 text-lg line-clamp-2">{exam.title}</h3>
+                    </div>
                     <p className="text-xs text-slate-400 font-medium">Số lượng: {exam.questions.length} câu hỏi</p>
                   </div>
                   <div className="flex justify-end mt-4">
@@ -121,6 +155,7 @@ export const ReadingTab = () => {
             <ArrowLeft size={20} />
           </button>
           <h2 className="font-bold text-slate-800 line-clamp-1 text-sm sm:text-base md:text-lg">
+            {selectedExam.id?.startsWith('ai-') && <Sparkles size={14} className="inline mr-1 text-emerald-500" />}
             DELF {selectedExam.level} - {selectedExam.title}
           </h2>
         </div>
@@ -143,7 +178,7 @@ export const ReadingTab = () => {
       <div className="flex-1 overflow-y-auto p-3 sm:p-6 flex flex-col lg:flex-row gap-4 sm:gap-6 items-start w-full max-w-7xl mx-auto">
         
         {/* Left Column: Passage */}
-        <div className="w-full lg:w-1/2 bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm shrink-0 lg:sticky lg:top-6 lg:max-h-[calc(100vh-140px)] lg:overflow-y-auto">
+        <div className="w-full lg:w-7/12 bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm shrink-0 lg:sticky lg:top-6 lg:max-h-[calc(100vh-140px)] lg:overflow-y-auto">
           <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 text-lg border-b border-slate-100 pb-3">
             <FileText size={20} className="text-[#1a56db]" /> Document
           </h3>
@@ -153,7 +188,7 @@ export const ReadingTab = () => {
         </div>
 
         {/* Right Column: Questions */}
-        <div className="w-full lg:w-1/2 flex flex-col gap-4 pb-12">
+        <div className="w-full lg:w-5/12 flex flex-col gap-4 pb-12">
           {selectedExam.questions.map((q: any, qIndex: number) => {
             const userAnswer = answers[q.id];
             const isCorrect = userAnswer === q.correctAnswer;

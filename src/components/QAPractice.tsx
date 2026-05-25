@@ -1,15 +1,19 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mic, MicOff, Loader2, ChevronRight, RotateCcw, Volume2, Sparkles, MessageCircle, Lightbulb } from 'lucide-react';
+import { Mic, MicOff, Loader2, ChevronRight, RotateCcw, Volume2, Sparkles, MessageCircle, Lightbulb, BookmarkPlus } from 'lucide-react';
 import { useVoiceRecognition } from '../hooks/useVoiceRecognition';
-import { groq } from '../lib/groq';
+import { groq, groqSafe } from '../lib/groq';
 import { useStats } from '../hooks/useStats';
+import { ClickableText } from './ClickableText';
+import { FavoriteItem } from '../types';
 
 interface QAPracticeProps {
   playAudio: (text: string, rate?: number) => void;
   isSpeaking: boolean;
   difficulty: string;
   onBack: () => void;
+  favorites: FavoriteItem[];
+  toggleFavorite: (item: FavoriteItem) => void;
 }
 
 interface QAQuestion {
@@ -22,9 +26,11 @@ interface QAFeedback {
   score: number;
   comment: string;
   correction?: string;
+  expansion?: string;
+  collocations?: Array<{french: string, english: string, example: string}>;
 }
 
-export const QAPractice: React.FC<QAPracticeProps> = ({ playAudio, isSpeaking, difficulty, onBack }) => {
+export const QAPractice: React.FC<QAPracticeProps> = ({ playAudio, isSpeaking, difficulty, onBack, favorites, toggleFavorite }) => {
   const stats = useStats();
   const [question, setQuestion] = useState<QAQuestion | null>(null);
   const [isLoadingQuestion, setIsLoadingQuestion] = useState(false);
@@ -45,30 +51,41 @@ export const QAPractice: React.FC<QAPracticeProps> = ({ playAudio, isSpeaking, d
     setIsLoadingQuestion(true);
     setFeedback(null);
     setUserAnswer('');
+    const levelInstructions = {
+      'A1': `A1 (Beginner): Very simple, direct questions about daily life, preferences, or routines. Mostly present tense. E.g. "Tu aimes...?", "C'est quoi ton...?"`,
+      'A2': `A2 (Elementary): Slightly more detailed questions. Can ask about past events or future plans. E.g. "Qu'est-ce que tu as fait...?", "Où vas-tu...?"`,
+      'B1': `B1 (Intermediate): Questions asking for opinions, feelings, or hypothetical situations. E.g. "Si tu pouvais...", "Qu'est-ce que tu penses de...?"`,
+      'B2': `B2 (Upper-Intermediate): Abstract, nuanced, hypothetical, or debate-style questions on broader topics.`
+    }[difficulty] || 'Standard level.';
+
     try {
-      const completion = await groq.chat.completions.create({
+      const completion = await groqSafe(() => groq.chat.completions.create({
         messages: [
           {
             role: "system",
-            content: `You are a French conversation practice coach. Generate ONE practice question/prompt for a student at ${difficulty} level.
+            content: `You are an expert French examiner. Generate ONE short, natural practice question for a ${difficulty} level student.
 
-The question should be a real-life situation that requires the student to respond in French. 
-Types: describe a situation, give an opinion, explain something, role-play a scenario, describe an image/event, etc.
+RULES:
+1. Short and direct (1-2 sentences max).
+2. Practical real-life or DELF-style question.
+3. VARY topics widely across: vie quotidienne, opinions, voyages, travail/études, relations, actualité, éducation (punitions, MOOC, devoirs, portable à l'école), monde du travail (télétravail, bien-être, semaine de 4 jours), environnement (recyclage, climat, énergies propres), médias & Internet (fake news, réseaux sociaux, données personnelles), loisirs & culture (cinéma, jeux vidéo, lecture, musées), santé (alimentation, sport, stress), société (bénévolat, logement, égalité).
+4. Use PROPER PUNCTUATION (commas, periods) to create natural pauses — this text is read aloud by TTS.
+5. Level Guidance: ${levelInstructions}
 
 Return JSON:
 {
-  "question": "The question in French",
-  "hint": "A short hint/starter phrase in French to help the student begin their answer",
+  "question": "French question with proper punctuation for natural rhythm",
+  "hint": "A brief starter phrase in French",
   "level": "${difficulty}"
 }
-Return valid JSON only. Make questions diverse and practical for daily life.`
+Return valid JSON only.`
           },
-          { role: "user", content: `Generate a new ${difficulty} level French speaking question. Topic: daily life, travel, food, work, hobbies, opinions. Be creative and diverse.` }
+          { role: "user", content: `Generate a new, creative ${difficulty} level French speaking question. Pick a DIFFERENT topic from these areas: daily life, education, work, environment, media/Internet, leisure/culture, health, society, technology, travel, relationships, current events.` }
         ],
         model: "llama-3.1-8b-instant",
         response_format: { type: "json_object" },
         temperature: 0.9
-      });
+      }));
       const raw = completion.choices[0]?.message?.content || '{}';
       const parsed = JSON.parse(raw);
       setQuestion(parsed);
@@ -87,14 +104,14 @@ Return valid JSON only. Make questions diverse and practical for daily life.`
     if (!question) return;
     setIsLoadingModelAnswer(true);
     try {
-      const completion = await groq.chat.completions.create({
+      const completion = await groqSafe(() => groq.chat.completions.create({
         messages: [
-          { role: "system", content: "You are a French coach. Provide a high-quality model answer to the student's question in French, and translate it to English. Use vocabulary suitable for " + difficulty + " level. Return JSON: {\"french\": \"...\", \"english\": \"...\"}" },
+          { role: "system", content: "You are a French coach. Provide a high-quality model answer in French, translated to English. Use vocabulary suitable for " + difficulty + " level. Use proper punctuation (commas, periods) for natural speech rhythm and pauses. Return JSON: {\"french\": \"...\", \"english\": \"...\"}" },
           { role: "user", content: `Question: ${question.question}` }
         ],
         model: "llama-3.1-8b-instant",
         response_format: { type: "json_object" }
-      });
+      }));
       const parsed = JSON.parse(completion.choices[0]?.message?.content || "{}");
       if (parsed.french) {
         setModelAnswer({ fr: parsed.french, en: parsed.english });
@@ -111,20 +128,25 @@ Return valid JSON only. Make questions diverse and practical for daily life.`
     voice.stopRecording();
     setIsEvaluating(true);
     try {
-      const completion = await groq.chat.completions.create({
+      const completion = await groqSafe(() => groq.chat.completions.create({
         messages: [
           {
             role: "system",
-            content: `You are a French language evaluator. The student was asked a question and provided an answer. Evaluate their French.
+            content: `You are an expert French evaluator and coach. Evaluate the student's answer comprehensively.
 
-Score from 0-100 based on: grammar accuracy, vocabulary usage, naturalness, relevance to the question.
+Score 0-100 based on: grammar, vocabulary, naturalness, relevance.
 
 Return JSON:
 {
   "score": 85,
-  "comment": "Brief feedback in English about their answer (1-2 sentences)",
-  "correction": "If there were errors, provide the corrected version in French. If perfect, leave empty string."
+  "comment": "Brief feedback in English (1-2 sentences)",
+  "correction": "Corrected French version if errors exist. Empty string if perfect.",
+  "expansion": "In English, give 2-3 specific ideas on HOW to develop a richer answer. E.g. 'You could explain why you prefer this, give a concrete example from last week, or compare with another option.'",
+  "collocations": [
+    {"french": "useful collocation for this topic", "english": "meaning", "example": "example sentence"}
+  ]
 }
+Provide exactly 2-3 collocations highly relevant to the question topic and appropriate for ${difficulty} level.
 Return valid JSON only.`
           },
           { role: "user", content: `Question: "${question.question}"\nStudent's answer: "${userAnswer}"` }
@@ -132,7 +154,7 @@ Return valid JSON only.`
         model: "llama-3.1-8b-instant",
         response_format: { type: "json_object" },
         temperature: 0.3
-      });
+      }));
       const raw = completion.choices[0]?.message?.content || '{}';
       const parsed = JSON.parse(raw);
       setFeedback(parsed);
@@ -194,7 +216,7 @@ Return valid JSON only.`
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2 flex items-center gap-1">
                       <Sparkles size={10} /> Câu hỏi
                     </p>
-                    <p className="text-lg font-semibold leading-snug">{question.question}</p>
+                    <ClickableText text={question.question} playAudio={playAudio} className="text-lg font-semibold leading-snug" wordClassName="hover:bg-white/20 active:bg-white/30" />
                   </div>
                   <button onClick={() => playAudio(question.question)}
                     disabled={isSpeaking}
@@ -203,7 +225,7 @@ Return valid JSON only.`
                   </button>
                 </div>
                 {question.hint && (
-                  <p className="mt-3 pt-3 border-t border-white/10 text-sm text-slate-300 italic">
+                  <p className="mt-3 pt-3 border-t border-white/10 text-sm text-slate-300 italic" style={{display:'block'}}>
                     💡 {question.hint}
                   </p>
                 )}
@@ -222,7 +244,7 @@ Return valid JSON only.`
                   ) : (
                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="space-y-2 bg-white/5 p-3 rounded-xl mt-2">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-blue-300 mb-1">Câu trả lời mẫu</p>
-                      <p className="text-sm font-medium leading-relaxed">{modelAnswer.fr}</p>
+                      <ClickableText text={modelAnswer.fr} playAudio={playAudio} className="text-sm font-medium leading-relaxed" wordClassName="hover:bg-white/20 active:bg-white/30" />
                       <p className="text-xs text-slate-400 italic border-l-2 border-slate-500 pl-2 mt-2">{modelAnswer.en}</p>
                     </motion.div>
                   )}
@@ -275,10 +297,45 @@ Return valid JSON only.`
                     {feedback.correction && (
                       <div className="mt-2 pt-2 border-t border-slate-100">
                         <p className="text-xs font-bold text-green-600 uppercase tracking-wider mb-1">Sửa lại:</p>
-                        <p className="text-sm text-green-700 font-medium italic">"{feedback.correction}"</p>
+                        <p className="text-sm text-green-700 font-medium italic">"<ClickableText text={feedback.correction} playAudio={playAudio} wordClassName="hover:bg-green-100 active:bg-green-200" />"</p>
                       </div>
                     )}
                   </div>
+
+                  {/* Expansion suggestions */}
+                  {feedback.expansion && (
+                    <div className="bg-blue-50 rounded-2xl border border-blue-100 p-4 shadow-sm">
+                      <p className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-2 flex items-center gap-1">💡 How to improve</p>
+                      <p className="text-sm text-blue-800 leading-relaxed">{feedback.expansion}</p>
+                    </div>
+                  )}
+
+                  {/* Collocations */}
+                  {feedback.collocations && feedback.collocations.length > 0 && (
+                    <div className="bg-purple-50 rounded-2xl border border-purple-100 p-4 shadow-sm">
+                      <p className="text-xs font-bold text-purple-600 uppercase tracking-wider mb-3 flex items-center gap-1">🧩 Useful Collocations</p>
+                      <div className="space-y-2.5">
+                        {feedback.collocations.map((c, i) => {
+                          const isSaved = favorites.some(f => f.textFr === c.french);
+                          return (
+                            <div key={i} className="flex items-start gap-2 bg-white/70 p-2.5 rounded-xl">
+                              <div className="flex-1 min-w-0">
+                                <ClickableText text={c.french} playAudio={playAudio} className="text-sm font-bold text-purple-900" wordClassName="hover:bg-purple-100 active:bg-purple-200" />
+                                <p className="text-xs text-purple-600 mt-0.5">{c.english}</p>
+                                {c.example && <p className="text-xs text-slate-500 italic mt-1">Ex: {c.example}</p>}
+                              </div>
+                              <button
+                                onClick={() => toggleFavorite({ id: `qa-col-${Date.now()}-${i}`, textFr: c.french, textEnVi: c.english, source: 'chat' })}
+                                className={`p-1.5 rounded-lg shrink-0 transition-colors ${isSaved ? 'text-purple-500 bg-purple-100' : 'text-slate-400 hover:text-purple-500 hover:bg-purple-100'}`}
+                              >
+                                <BookmarkPlus size={16} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
                   {userAnswer && (
                     <div className="bg-slate-50 rounded-2xl border border-slate-100 p-3.5">

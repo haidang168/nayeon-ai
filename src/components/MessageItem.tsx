@@ -3,6 +3,7 @@ import { Volume2, Heart, Lightbulb, Loader2, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Message, FavoriteItem } from '../types';
+import { ClickableText } from './ClickableText';
 
 interface MessageItemProps {
   msg: Message;
@@ -28,8 +29,16 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
       <div className="flex flex-col max-w-[90%] sm:max-w-[85%]">
         <div className="flex flex-col relative group">
           <div className={`px-4 py-3 sm:px-5 sm:py-4 rounded-2xl shadow-sm ${msg.role === 'user' ? 'bg-brand-primary text-white rounded-tr-sm' : 'bg-slate-50 text-slate-800 rounded-tl-sm border border-slate-100'}`}>
-            <div className="markdown-body font-medium text-base sm:text-[15px] leading-relaxed">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.textFr || ''}</ReactMarkdown>
+            <div className="markdown-body font-medium text-[17px] sm:text-[18px] leading-relaxed">
+              {msg.role === 'app' ? (
+                <ClickableText 
+                  text={msg.textFr || ''} 
+                  playAudio={playAudio} 
+                  wordClassName={`hover:bg-blue-50 active:bg-blue-100`}
+                />
+              ) : (
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.textFr || ''}</ReactMarkdown>
+              )}
             </div>
             {msg.textEn && <p className={`text-[13px] sm:text-sm mt-1.5 pt-2 border-t font-medium ${msg.role === 'user' ? 'text-blue-100 border-white/20' : 'text-slate-500 border-slate-200'}`}>{msg.textEn}</p>}
           </div>

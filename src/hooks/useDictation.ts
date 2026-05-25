@@ -6,8 +6,9 @@ import {
   fetchYouTubeTranscript,
   fetchVideoInfo,
   mergeSegmentsIntoSentences,
+  preFilterSentences,
 } from '../lib/youtubeTranscript';
-import { groq } from '../lib/groq';
+import { groq, groqSafe } from '../lib/groq';
 import { useStats } from './useStats';
 import { syncDataToCloud, loadDataFromCloud } from '../lib/firebase';
 
@@ -244,6 +245,7 @@ export function useDictation() {
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState('');
+  const [importProgress, setImportProgress] = useState('');
   const [importPreview, setImportPreview] = useState<{
     title: string;
     thumbnailUrl: string;
@@ -306,8 +308,74 @@ export function useDictation() {
     syncDataToCloud({ dictationSrs: items });
   }, []);
 
-  // ─── YouTube Import ───
-  const importFromYouTube = useCallback(async () => {
+  // ─── AI Punctuate & Restructure (chunked) ───
+  const aiPunctuateChunk = async (rawTexts: string[]): Promise<string[]> => {
+    const numbered = rawTexts.map((t, i) => `${i}: ${t}`).join('\n');
+    try {
+      const completion = await groqSafe(() => groq.chat.completions.create({
+        messages: [
+          {
+            role: "system",
+            content: `You are a French language expert. The following lines are raw auto-generated YouTube captions in French. They often:
+- Lack proper punctuation (periods, commas, question marks)
+- Are split mid-sentence across multiple lines
+- Have broken grammar due to caption timing
+
+Your job:
+1. Merge fragments that belong to the same sentence
+2. Add proper French punctuation (periods, commas, question marks, exclamation marks)
+3. Fix obvious capitalization (start of sentences)
+4. Do NOT change the actual words — only fix punctuation and merge/split lines
+5. Each output sentence should be a natural, complete French sentence
+
+Return JSON: { "sentences": ["Complete sentence 1.", "Complete sentence 2.", ...] }
+Return ONLY valid JSON.`
+          },
+          { role: "user", content: numbered }
+        ],
+        model: "llama-3.3-70b-versatile",
+        response_format: { type: "json_object" },
+        temperature: 0.1
+      }));
+      const parsed = JSON.parse(completion.choices[0]?.message?.content || '{}');
+      return parsed.sentences || rawTexts;
+    } catch (err) {
+      console.warn('AI punctuate chunk failed, using raw text', err);
+      return rawTexts;
+    }
+  };
+
+  // ─── AI Vocabulary Extraction (separate call) ───
+  const aiExtractVocabulary = async (fullText: string): Promise<Array<{word: string; meaning: string}>> => {
+    try {
+      const completion = await groqSafe(() => groq.chat.completions.create({
+        messages: [
+          {
+            role: "system",
+            content: `You are a French language expert. Extract 5-10 of the most useful or difficult French vocabulary words/phrases from the transcript below. Focus on:
+- Common collocations and fixed expressions
+- Words that intermediate learners should know
+- Useful verbs, adjectives, and adverbs
+
+Return JSON: { "vocabulary": [{ "word": "French word/phrase", "meaning": "Vietnamese meaning" }] }
+Return ONLY valid JSON.`
+          },
+          { role: "user", content: fullText.slice(0, 3000) }
+        ],
+        model: "llama-3.1-8b-instant",
+        response_format: { type: "json_object" },
+        temperature: 0.2
+      }));
+      const parsed = JSON.parse(completion.choices[0]?.message?.content || '{}');
+      return parsed.vocabulary || [];
+    } catch (err) {
+      console.warn('AI vocab extraction failed', err);
+      return [];
+    }
+  };
+
+  // ─── YouTube Import (new pipeline) ───
+  const importFromYouTube = useCallback(async (previewOnly: boolean = false) => {
     const videoId = extractVideoId(youtubeUrl);
     if (!videoId) {
       setImportError('Link YouTube không hợp lệ. Vui lòng kiểm tra lại.');
@@ -317,8 +385,10 @@ export function useDictation() {
     setIsImporting(true);
     setImportError('');
     setImportPreview(null);
+    setImportProgress('Đang lấy phụ đề...');
 
     try {
+      // Step 1: Fetch transcript + video info
       const [segments, info] = await Promise.all([
         fetchYouTubeTranscript(videoId),
         fetchVideoInfo(videoId),
@@ -329,84 +399,141 @@ export function useDictation() {
         return;
       }
 
-      const allSentences = mergeSegmentsIntoSentences(segments, videoId);
+      // Step 2: Merge segments into rough sentences (existing heuristic)
+      setImportProgress('Đang gộp phụ đề...');
+      const roughSentences = mergeSegmentsIntoSentences(segments, videoId);
 
-      // ── AI auto-filter: pick only sentences with useful collocations/chunks/patterns ──
-      const allTexts = allSentences.map((s, i) => `${i}: ${s.text}`).join('\n');
+      // Step 3: AI Punctuate & Restructure (chunked, parallel)
+      setImportProgress('AI đang xử lý câu...');
+      const CHUNK_SIZE = 30;
+      const rawTexts = roughSentences.map(s => s.text);
+      const chunks: string[][] = [];
+      for (let i = 0; i < rawTexts.length; i += CHUNK_SIZE) {
+        chunks.push(rawTexts.slice(i, i + CHUNK_SIZE));
+      }
+
+      // Run AI punctuation for all chunks + vocab extraction in parallel
+      const fullTranscriptText = rawTexts.join(' ');
+      const [punctuatedChunks, extractedVocab] = await Promise.all([
+        Promise.all(chunks.map(chunk => aiPunctuateChunk(chunk))),
+        aiExtractVocabulary(fullTranscriptText),
+      ]);
+
+      // Flatten punctuated results into sentences with timing
+      setImportProgress('Đang lọc câu...');
+      const punctuatedTexts = punctuatedChunks.flat();
       
-      let selectedIndices: number[] = [];
-      let extractedVocab: Array<{word: string; meaning: string}> = [];
-      try {
-        const completion = await groq.chat.completions.create({
-          messages: [
-            {
-              role: "system",
-              content: `You are a French language learning expert. From the numbered list of sentences below, do TWO things:
-1. Select ONLY the ones that are most valuable for language learners to practice dictation.
-SELECT sentences that contain:
-- Common collocations (e.g. "faire attention", "avoir besoin de")
-- Useful chunks and fixed expressions
-- Important sentence patterns used frequently in daily life
-- Rich vocabulary worth learning
+      // Map punctuated sentences back to timing data
+      // Strategy: distribute timing proportionally from original rough sentences
+      const finalSentences: DictationSentence[] = [];
+      let roughIdx = 0;
+      let roughCharOffset = 0;
+      
+      for (let pi = 0; pi < punctuatedTexts.length; pi++) {
+        const pText = punctuatedTexts[pi].trim();
+        if (!pText) continue;
 
-SKIP sentences that are:
-- Filler/transition phrases (e.g. "alors", "bon", "voilà")
-- Too short (under 4 words) or too long (over 15 words)
-- Channel intros/outros, greetings that are not linguistically useful
-- Repeated patterns
+        // Find the best matching rough sentence for timing
+        // Simple approach: advance through rough sentences as punctuated text consumes them
+        let bestStart = roughSentences[Math.min(roughIdx, roughSentences.length - 1)]?.startTime ?? 0;
+        let bestEnd = roughSentences[Math.min(roughIdx, roughSentences.length - 1)]?.endTime ?? 0;
 
-2. Extract 5-10 difficult or useful French vocabulary words/phrases from the entire transcript.
+        // Try to find overlapping rough sentences for this punctuated sentence
+        const pWords = pText.toLowerCase().split(/\s+/);
+        let matchFound = false;
+        for (let ri = roughIdx; ri < Math.min(roughIdx + 5, roughSentences.length); ri++) {
+          const rWords = roughSentences[ri].text.toLowerCase().split(/\s+/);
+          // Check if there's significant word overlap
+          const overlap = pWords.filter(w => rWords.includes(w)).length;
+          if (overlap >= Math.min(2, pWords.length * 0.3)) {
+            bestStart = roughSentences[ri].startTime;
+            bestEnd = roughSentences[ri].endTime;
+            // Look ahead for multi-segment spans
+            for (let rj = ri + 1; rj < Math.min(ri + 3, roughSentences.length); rj++) {
+              const rjWords = roughSentences[rj].text.toLowerCase().split(/\s+/);
+              const rjOverlap = pWords.filter(w => rjWords.includes(w)).length;
+              if (rjOverlap >= 1) {
+                bestEnd = roughSentences[rj].endTime;
+                roughIdx = rj + 1;
+              }
+            }
+            if (roughIdx <= ri) roughIdx = ri + 1;
+            matchFound = true;
+            break;
+          }
+        }
+        if (!matchFound && roughIdx < roughSentences.length) {
+          bestStart = roughSentences[roughIdx].startTime;
+          bestEnd = roughSentences[roughIdx].endTime;
+          roughIdx++;
+        }
 
-Return a JSON object: 
-{ 
-  "indices": [0, 3, 5, ...],
-  "vocabulary": [
-    { "word": "word in french", "meaning": "vietnamese meaning" }
-  ]
-}
-Pick 10-25 of the best sentences. Return valid JSON only.`
-            },
-            { role: "user", content: allTexts }
-          ],
-          model: "llama-3.1-8b-instant",
-          response_format: { type: "json_object" },
-          temperature: 0.2
+        finalSentences.push({
+          id: `s-${pi}`,
+          text: pText,
+          startTime: Math.round(bestStart * 10) / 10,
+          endTime: Math.round(bestEnd * 10) / 10,
+          videoId,
         });
-        
-        const raw = completion.choices[0]?.message?.content || '{}';
-        const parsed = JSON.parse(raw);
-        selectedIndices = (parsed.indices || []).filter((i: number) => i >= 0 && i < allSentences.length);
-        extractedVocab = parsed.vocabulary || [];
-      } catch (aiErr) {
-        console.warn("AI filter failed, falling back to heuristic", aiErr);
       }
 
-      // Fallback: if AI returned nothing, use heuristic (sentences with 4-12 words)
-      if (selectedIndices.length === 0) {
-        selectedIndices = allSentences
-          .map((s, i) => ({ i, wc: s.text.split(/\s+/).length }))
-          .filter(s => s.wc >= 4 && s.wc <= 12)
-          .slice(0, 20)
-          .map(s => s.i);
+      // Step 4: Hard-filter (code-based)
+      const cleanSentences = preFilterSentences(finalSentences);
+
+      if (cleanSentences.length === 0) {
+        setImportError('Không tìm được câu phù hợp từ video này. Hãy thử video khác.');
+        return;
       }
 
-      const filteredSentences = selectedIndices.map(i => allSentences[i]);
-      const selected = new Set<string>(filteredSentences.map(s => s.id));
-      setSelectedSentenceIds(selected);
+      // Step 5: If previewOnly, show preview for manual adjustment
+      if (previewOnly) {
+        const selected = new Set<string>(cleanSentences.map(s => s.id));
+        setSelectedSentenceIds(selected);
+        setImportPreview({
+          title: info.title,
+          thumbnailUrl: info.thumbnailUrl,
+          sentences: finalSentences, // all sentences for manual toggle
+          videoId,
+          vocabulary: extractedVocab,
+        });
+        return;
+      }
 
-      setImportPreview({
-        title: info.title,
-        thumbnailUrl: info.thumbnailUrl,
-        sentences: allSentences, // keep all for manual adjustment
+      // Step 6: Auto-save & start practice immediately
+      setImportProgress('Đang lưu...');
+      const lesson: DictationLesson = {
+        id: `yt-${videoId}-${Date.now()}`,
         videoId,
-        vocabulary: extractedVocab
-      });
+        title: info.title,
+        sentences: cleanSentences,
+        thumbnailUrl: info.thumbnailUrl,
+        savedAt: Date.now(),
+        vocabulary: extractedVocab,
+      };
+
+      const updated = [lesson, ...savedLessons];
+      updateSavedLessons(updated);
+      setYoutubeUrl('');
+      setImportProgress('');
+
+      // Auto-start practice
+      setCurrentLesson(lesson);
+      setCurrentIndex(0);
+      setUserInput('');
+      setIsChecked(false);
+      setLastDiff(null);
+      setSessionScores([]);
+      setShadowingTranscript('');
+      setShowShadowingAnswer(false);
+      setPhase('practice');
+
     } catch (err: any) {
       setImportError(err.message || 'Không thể lấy phụ đề từ video này.');
     } finally {
       setIsImporting(false);
+      setImportProgress('');
     }
-  }, [youtubeUrl]);
+  }, [youtubeUrl, savedLessons, updateSavedLessons]);
 
   const toggleSentenceSelection = useCallback((id: string) => {
     setSelectedSentenceIds(prev => {
@@ -651,6 +778,7 @@ Pick 10-25 of the best sentences. Return valid JSON only.`
     youtubeUrl, setYoutubeUrl,
     isImporting,
     importError,
+    importProgress,
     importPreview,
     selectedSentenceIds,
     toggleSentenceSelection,

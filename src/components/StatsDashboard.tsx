@@ -3,7 +3,13 @@ import { motion } from 'motion/react';
 import { Flame, Target, CalendarDays, Award, Settings } from 'lucide-react';
 import { useStats } from '../hooks/useStats';
 
-export const StatsDashboard: React.FC = () => {
+interface StatsDashboardProps {
+  vocabCount: number;
+  conversationCount: number;
+  streak: number;
+}
+
+export const StatsDashboard: React.FC<StatsDashboardProps> = ({ vocabCount, conversationCount, streak }) => {
   const { stats, isStatsLoaded, updateGoals, getTodayString } = useStats();
   const [isEditingDaily, setIsEditingDaily] = useState(false);
   const [isEditingLongTerm, setIsEditingLongTerm] = useState(false);
@@ -47,6 +53,9 @@ export const StatsDashboard: React.FC = () => {
   const weeklyXP = weekDates.reduce((sum, d) => sum + (stats.history[d]?.xp || 0), 0);
   const studyDaysThisWeek = weekDates.filter(d => (stats.history[d]?.xp || 0) > 0).length;
 
+  const totalStudyMinutes = Object.values(stats.history).reduce((sum, stat) => sum + (stat.studyMinutes || 0), 0);
+  const totalLessons = Object.values(stats.history).reduce((sum, stat) => sum + (stat.lessonsCompleted || 0), 0);
+
   const saveDailyGoals = () => {
     updateGoals({ ...stats.goals, daily: dailyForm });
     setIsEditingDaily(false);
@@ -84,6 +93,30 @@ export const StatsDashboard: React.FC = () => {
                 <span>Hôm nay +{todayStats.xp} XP</span>
               </div>
             </div>
+          </div>
+        </motion.div>
+
+        {/* Thống kê tổng quan */}
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm flex flex-col items-center justify-center text-center">
+            <span className="w-8 h-8 rounded-full bg-orange-100 text-orange-500 flex items-center justify-center mb-2"><Flame size={16} /></span>
+            <span className="text-xl font-black text-slate-700">{streak}</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">Ngày liên tiếp</span>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm flex flex-col items-center justify-center text-center">
+            <span className="w-8 h-8 rounded-full bg-purple-100 text-purple-500 flex items-center justify-center mb-2"><Award size={16} /></span>
+            <span className="text-xl font-black text-slate-700">{vocabCount}</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">Từ vựng đã lưu</span>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm flex flex-col items-center justify-center text-center">
+            <span className="w-8 h-8 rounded-full bg-blue-100 text-blue-500 flex items-center justify-center mb-2"><Target size={16} /></span>
+            <span className="text-xl font-black text-slate-700">{conversationCount}</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">Cuộc trò chuyện</span>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm flex flex-col items-center justify-center text-center">
+            <span className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-500 flex items-center justify-center mb-2"><CalendarDays size={16} /></span>
+            <span className="text-xl font-black text-slate-700">{Math.floor(totalStudyMinutes / 60)}h {totalStudyMinutes % 60}m</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">Tổng thời gian</span>
           </div>
         </motion.div>
 
