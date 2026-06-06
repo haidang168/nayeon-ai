@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { Type } from "@google/genai";
 import { ai } from '../lib/gemini';
 import { groq, groqSafe } from '../lib/groq';
@@ -282,6 +282,13 @@ export function useChat(initialMessages: Message[] | null, defaultScenario: Scen
   const [evaluation, setEvaluation] = useState<EvaluationData | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
 
+  // Hot-swap chat history when synced from another device
+  useEffect(() => {
+    if (initialMessages && !isAiTyping) {
+      setMessages(initialMessages);
+    }
+  }, [initialMessages]);
+
   const startNewSession = useCallback(async (scenario = selectedScenario, currentDifficulty = difficulty, playAudioFn?: (text: string) => void, currentDelfPart = delfPart) => {
     setMessages([]);
     setIsAiTyping(true);
@@ -488,6 +495,7 @@ export function useChat(initialMessages: Message[] | null, defaultScenario: Scen
 
         let accumulated = '';
         let sentenceBuffer = '';
+        let lastUiUpdate = 0; // Throttle UI updates to prevent Safari iOS freeze
 
         for await (const chunk of stream) {
           if (streamAbort.signal.aborted) break;
@@ -495,16 +503,22 @@ export function useChat(initialMessages: Message[] | null, defaultScenario: Scen
           accumulated += delta;
           sentenceBuffer += delta;
 
-          // Update message display real-time
-          setMessages(prev => {
-            const idx = prev.findIndex(m => m.id === tempId);
-            if (idx >= 0) {
-              const updated = [...prev];
-              updated[idx] = { ...updated[idx], textFr: accumulated };
-              return updated;
-            }
-            return prev;
-          });
+          // Throttle UI updates: only re-render every 150ms
+          // Without this, Safari iOS freezes from hundreds of re-renders/sec
+          const now = Date.now();
+          if (now - lastUiUpdate > 150) {
+            lastUiUpdate = now;
+            const textSnapshot = accumulated; // Capture for closure
+            setMessages(prev => {
+              const idx = prev.findIndex(m => m.id === tempId);
+              if (idx >= 0) {
+                const updated = [...prev];
+                updated[idx] = { ...updated[idx], textFr: textSnapshot };
+                return updated;
+              }
+              return prev;
+            });
+          }
 
           // Queue TTS as early as possible — don't wait for full sentence
           if (streamingAudio) {
@@ -520,6 +534,17 @@ export function useChat(initialMessages: Message[] | null, defaultScenario: Scen
             }
           }
         }
+
+        // Final UI update — ensure all accumulated text is shown
+        setMessages(prev => {
+          const idx = prev.findIndex(m => m.id === tempId);
+          if (idx >= 0) {
+            const updated = [...prev];
+            updated[idx] = { ...updated[idx], textFr: accumulated };
+            return updated;
+          }
+          return prev;
+        });
 
         // Queue any remaining text for TTS
         if (streamingAudio && sentenceBuffer.trim().length > 0) {

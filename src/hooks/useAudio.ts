@@ -2,9 +2,19 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { generateTTSHedged } from '../lib/gemini';
 
-/** Max wait for the FIRST chunk before falling back to browser voice */
-const FIRST_CHUNK_TIMEOUT_MS = 2500;
-const CACHE_MAX_SIZE = 50;
+/** Audio data: Float32Array for desktop (AudioContext), string (MP3 base64) for mobile (Audio element) */
+type AudioData = Float32Array | string;
+
+const IS_MOBILE = typeof navigator !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+/** Max wait for the FIRST chunk before falling back to browser voice.
+ *  Mobile gets longer timeout (5s) because 4G is slower — prevents unnecessary
+ *  fallback to browser voice which sounds completely different from Gemini TTS. */
+const FIRST_CHUNK_TIMEOUT_MS = IS_MOBILE ? 5000 : 2500;
+
+/** LRU cache size — reduced on mobile to prevent memory pressure (each entry ~100-400KB).
+ *  50 entries on desktop ≈ 20MB max, 15 on mobile ≈ 6MB max. */
+const CACHE_MAX_SIZE = IS_MOBILE ? 15 : 50;
 
 /**
  * Split text into short sentence-level chunks for parallel TTS.
@@ -35,22 +45,48 @@ function splitIntoChunks(text: string): string[] {
 }
 
 /**
- * Generate TTS for a single chunk via hedged Gemini TTS.
- * Fires request to 3 keys simultaneously, uses fastest response.
+ * Generate TTS audio for a single text chunk.
+ * - Mobile: returns raw MP3 base64 string (played via <audio> element)
+ * - Desktop: returns Float32Array PCM samples (played via AudioContext)
  */
-async function generateTTSChunk(text: string): Promise<Float32Array | null> {
-  const base64Audio = await generateTTSHedged(text);
-  if (!base64Audio) return null;
+async function generateTTSChunk(text: string, ctx?: AudioContext | null): Promise<AudioData | null> {
+  const result = await generateTTSHedged(text);
+  if (!result) return null;
+  const { audio: base64Audio, format } = result;
 
+  // MOBILE: return raw MP3 base64 — will be played via native Audio element
+  // No decoding needed! Browser handles MP3 natively. This is the most reliable
+  // approach for iOS Safari which has severe AudioContext limitations.
+  if (IS_MOBILE && format === 'mp3') {
+    return base64Audio;
+  }
+
+  // DESKTOP: decode to Float32Array for AudioContext playback
   const binaryString = atob(base64Audio);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
+  const numBytes = binaryString.length;
+  const bytes = new Uint8Array(numBytes);
+  for (let i = 0; i < numBytes; i++) {
     bytes[i] = binaryString.charCodeAt(i);
   }
-  const pcm16 = new Int16Array(bytes.buffer);
-  const float32 = new Float32Array(pcm16.length);
-  for (let i = 0; i < pcm16.length; i++) {
-    float32[i] = pcm16[i] / 32768;
+
+  // Decode MP3 via AudioContext (desktop only)
+  if (format === 'mp3') {
+    if (!ctx) return null;
+    try {
+      const audioBuffer = await ctx.decodeAudioData(bytes.buffer);
+      return audioBuffer.getChannelData(0);
+    } catch (e) {
+      console.error('[TTS] Failed to decode MP3:', e);
+      return null;
+    }
+  }
+
+  // Convert Int16 PCM → Float32 (Gemini direct API, desktop only)
+  const dataView = new DataView(bytes.buffer);
+  const numSamples = numBytes >> 1;
+  const float32 = new Float32Array(numSamples);
+  for (let i = 0; i < numSamples; i++) {
+    float32[i] = dataView.getInt16(i * 2, true) / 32768;
   }
   return float32;
 }
@@ -67,7 +103,9 @@ export function useAudio() {
   const wordAbortRef = useRef<AbortController | null>(null);
 
   // LRU Audio Cache
-  const audioCacheRef = useRef<Map<string, Float32Array>>(new Map());
+  const audioCacheRef = useRef<Map<string, AudioData>>(new Map());
+  // Ref to current HTMLAudioElement for mobile playback
+  const mobileAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Streaming audio queue
   const playQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -86,7 +124,15 @@ export function useAudio() {
   const getAudioCtx = useCallback(async () => {
     if (!audioCtxRef.current) {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      audioCtxRef.current = new AudioCtx();
+      // Force 24kHz sample rate to match Gemini TTS output exactly.
+      // This eliminates browser-specific resampling that causes speed/pitch
+      // differences across devices (especially Safari iOS vs Chrome Desktop).
+      try {
+        audioCtxRef.current = new AudioCtx({ sampleRate: 24000 });
+      } catch {
+        // Fallback for browsers that don't support sampleRate option
+        audioCtxRef.current = new AudioCtx();
+      }
     }
     if (audioCtxRef.current.state === 'suspended') {
       await audioCtxRef.current.resume();
@@ -94,31 +140,32 @@ export function useAudio() {
     // Create gain node for volume boost
     if (!gainNodeRef.current && audioCtxRef.current) {
       gainNodeRef.current = audioCtxRef.current.createGain();
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-      // Reduce mobile gain from 2.0 to 1.2 to prevent heavy clipping/distortion on phones
-      gainNodeRef.current.gain.value = isMobile ? 1.2 : 1.2;
+      gainNodeRef.current.gain.value = 1.2;
       gainNodeRef.current.connect(audioCtxRef.current.destination);
     }
     return audioCtxRef.current;
   }, []);
 
   // --- Cache helpers ---
-  const cacheAudio = useCallback((key: string, data: Float32Array) => {
+  const cacheAudio = useCallback((key: string, data: AudioData) => {
     const cache = audioCacheRef.current;
     if (cache.size >= CACHE_MAX_SIZE) {
       const firstKey = cache.keys().next().value;
       if (firstKey) cache.delete(firstKey);
     }
     cache.set(key, data);
-    idbSet('audio_' + key, data).catch(() => {});
+    // Only persist Float32Array to IDB (strings are MP3 base64, too large)
+    if (data instanceof Float32Array) {
+      idbSet('audio_' + key, data).catch(() => {});
+    }
   }, []);
 
-  const getCachedAudio = useCallback(async (key: string): Promise<Float32Array | null> => {
+  const getCachedAudio = useCallback(async (key: string): Promise<AudioData | null> => {
     const cache = audioCacheRef.current;
     const memData = cache.get(key);
     if (memData) {
       cache.delete(key);
-      cache.set(key, memData); // Move to end (most recently used)
+      cache.set(key, memData);
       return memData;
     }
     try {
@@ -131,18 +178,41 @@ export function useAudio() {
     return null;
   }, []);
 
-  // --- Core playback (with GainNode) ---
-  const playBuffer = useCallback(async (float32: Float32Array, rate: number, signal: AbortSignal): Promise<void> => {
+  // --- Core playback ---
+  const playBuffer = useCallback(async (data: AudioData, rate: number, signal: AbortSignal): Promise<void> => {
     if (signal.aborted) { throw new DOMException('Aborted', 'AbortError'); }
 
+    // ═══ MOBILE: Use native <audio> element (most reliable on iOS Safari) ═══
+    if (typeof data === 'string') {
+      const binary = atob(data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const blob = new Blob([bytes], { type: 'audio/mpeg' });
+      const url = URL.createObjectURL(blob);
+
+      return new Promise<void>((resolve, reject) => {
+        const audio = new Audio(url);
+        audio.playbackRate = rate;
+        mobileAudioRef.current = audio;
+
+        const cleanup = () => { URL.revokeObjectURL(url); mobileAudioRef.current = null; };
+        const onAbort = () => { audio.pause(); audio.src = ''; cleanup(); reject(new DOMException('Aborted', 'AbortError')); };
+        signal.addEventListener('abort', onAbort, { once: true });
+
+        audio.onended = () => { signal.removeEventListener('abort', onAbort); cleanup(); resolve(); };
+        audio.onerror = () => { signal.removeEventListener('abort', onAbort); cleanup(); reject(new Error('Audio playback error')); };
+        audio.play().catch(e => { cleanup(); reject(e); });
+      });
+    }
+
+    // ═══ DESKTOP: Use AudioContext (fast, low-latency) ═══
     const ctx = await getAudioCtx();
-    const audioBuffer = ctx.createBuffer(1, float32.length, 24000);
-    audioBuffer.getChannelData(0).set(float32);
+    const audioBuffer = ctx.createBuffer(1, data.length, 24000);
+    audioBuffer.getChannelData(0).set(data);
 
     const source = ctx.createBufferSource();
     source.buffer = audioBuffer;
     source.playbackRate.value = rate;
-    // Route through GainNode for volume boost
     if (gainNodeRef.current) {
       source.connect(gainNodeRef.current);
     } else {
@@ -153,7 +223,6 @@ export function useAudio() {
     return new Promise<void>((resolve, reject) => {
       const onAbort = () => { try { source.stop(); } catch (e) {} reject(new DOMException('Aborted', 'AbortError')); };
       signal.addEventListener('abort', onAbort, { once: true });
-
       source.onended = () => { signal.removeEventListener('abort', onAbort); resolve(); };
       source.start(0);
     });
@@ -191,6 +260,7 @@ export function useAudio() {
     // Cancel previous
     if (abortRef.current) abortRef.current.abort();
     if (currentSourceRef.current) { try { currentSourceRef.current.stop(); } catch (e) {} }
+    if (mobileAudioRef.current) { mobileAudioRef.current.pause(); mobileAudioRef.current.src = ''; }
     window.speechSynthesis?.cancel();
 
     const abort = new AbortController();
@@ -198,7 +268,7 @@ export function useAudio() {
     setIsSpeaking(true);
 
     try {
-      await getAudioCtx();
+      const ctx = await getAudioCtx();
 
       const chunks = splitIntoChunks(text);
 
@@ -206,7 +276,7 @@ export function useAudio() {
       const ttsPromises = chunks.map(async chunk => {
         const cached = await getCachedAudio(chunk);
         if (cached) return cached;
-        return generateTTSChunk(chunk);
+        return generateTTSChunk(chunk, ctx);
       });
 
       // Race the first chunk against a timeout
@@ -255,7 +325,6 @@ export function useAudio() {
   const playWordAudio = useCallback(async (text: string, rate: number = 1.0) => {
     if (!text) return;
 
-    // Cancel only previous word audio
     if (wordAbortRef.current) wordAbortRef.current.abort();
     if (wordSourceRef.current) { try { wordSourceRef.current.stop(); } catch (e) {} }
 
@@ -265,12 +334,27 @@ export function useAudio() {
     try {
       const ctx = await getAudioCtx();
       const cached = await getCachedAudio(text);
-      const samples = cached || await generateTTSChunk(text);
-      if (abort.signal.aborted || !samples) return;
-      cacheAudio(text, samples);
+      const audioData = cached || await generateTTSChunk(text, ctx);
+      if (abort.signal.aborted || !audioData) return;
+      cacheAudio(text, audioData);
 
-      const audioBuffer = ctx.createBuffer(1, samples.length, 24000);
-      audioBuffer.getChannelData(0).set(samples);
+      // Mobile: use Audio element
+      if (typeof audioData === 'string') {
+        const binary = atob(audioData);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const blob = new Blob([bytes], { type: 'audio/mpeg' });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.playbackRate = rate;
+        audio.onended = () => URL.revokeObjectURL(url);
+        audio.play().catch(() => URL.revokeObjectURL(url));
+        return;
+      }
+
+      // Desktop: AudioContext
+      const audioBuffer = ctx.createBuffer(1, audioData.length, 24000);
+      audioBuffer.getChannelData(0).set(audioData);
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
       source.playbackRate.value = rate;
@@ -280,7 +364,6 @@ export function useAudio() {
       source.start(0);
     } catch (e: any) {
       if (e?.name === 'AbortError') return;
-      // Silent fail for word audio — not critical
     }
   }, [getAudioCtx, getCachedAudio, cacheAudio]);
 
@@ -290,6 +373,7 @@ export function useAudio() {
   const startStreamingAudio = useCallback(async () => {
     if (abortRef.current) abortRef.current.abort();
     if (currentSourceRef.current) { try { currentSourceRef.current.stop(); } catch (e) {} }
+    if (mobileAudioRef.current) { mobileAudioRef.current.pause(); mobileAudioRef.current.src = ''; }
     window.speechSynthesis?.cancel();
 
     const abort = new AbortController();
@@ -316,8 +400,10 @@ export function useAudio() {
     lastQueuedRef.current = trimmed;
 
     // Check cache first (async), but start TTS immediately if not cached
-    const ttsPromise = getCachedAudio(trimmed).then(cached => {
-      return cached ? cached : generateTTSChunk(trimmed);
+    const ttsPromise = getCachedAudio(trimmed).then(async cached => {
+      if (cached) return cached;
+      const ctx = await getAudioCtx();
+      return generateTTSChunk(trimmed, ctx);
     });
 
     playQueueRef.current = playQueueRef.current.then(async () => {
@@ -355,34 +441,46 @@ export function useAudio() {
   }, []);
 
   const primeSpeech = useCallback(() => {
-    // 1. Unlock browser TTS
+    // 1. Unlock browser TTS (for fallback)
     if ('speechSynthesis' in window) {
       const u = new SpeechSynthesisUtterance('');
       u.volume = 0;
       window.speechSynthesis.speak(u);
     }
+
+    // 2. MOBILE: Unlock HTML Audio element (most reliable for iOS Safari)
+    //    Playing a tiny silent audio from a user gesture unlocks future .play() calls
+    if (IS_MOBILE) {
+      try {
+        const silentMp3 = 'data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYoRwMHAAAAAAD/+1DEAAAFeAFf9AAAAANIM//gAABEAAAANIAAAAASMA/BAQBA4PggCAIH/6BIHBwEDg+D58H/6BIHBwEAQOf/Lg4OAgc//+UBAEDgIH///5cHBwEDn/8uDg4CBz///l/+XBwcBA5//8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/7UMQfAAi4MVf9EAAAAADSAN/IAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+        const audio = new Audio(silentMp3);
+        audio.volume = 0.01;
+        audio.play().catch(() => {});
+      } catch {}
+    }
     
-    // 2. Unlock Web Audio API synchronously
+    // 3. Unlock Web Audio API (Both Desktop and Mobile)
     if (!audioCtxRef.current) {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      audioCtxRef.current = new AudioCtx();
+      try {
+        audioCtxRef.current = new AudioCtx({ sampleRate: 24000 });
+      } catch {
+        audioCtxRef.current = new AudioCtx();
+      }
     }
     
     const ctx = audioCtxRef.current;
     if (ctx.state === 'suspended') {
-      ctx.resume();
+      ctx.resume().catch(() => {});
     }
 
-    // Create gain node for volume boost
     if (!gainNodeRef.current) {
       gainNodeRef.current = ctx.createGain();
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-      gainNodeRef.current.gain.value = isMobile ? 1.2 : 1.2;
+      gainNodeRef.current.gain.value = 1.2;
       gainNodeRef.current.connect(ctx.destination);
     }
     
-    // Create and play a tiny, silent buffer to force unlock
-    const buffer = ctx.createBuffer(1, 1, 22050);
+    const buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(ctx.destination);

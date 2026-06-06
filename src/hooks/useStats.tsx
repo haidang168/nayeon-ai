@@ -33,29 +33,50 @@ export function StatsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const initStats = async () => {
       const cloudData = await loadDataFromCloud();
-      let initialStats = cloudData?.stats;
+      
+      const savedStatsStr = localStorage.getItem('userStats');
+      let localStats: UserStats | null = null;
+      if (savedStatsStr) {
+        try { localStats = JSON.parse(savedStatsStr); } catch (e) {}
+      }
 
-      if (!initialStats) {
-        const savedStats = localStorage.getItem('userStats');
-        if (savedStats) {
-          try {
-            initialStats = JSON.parse(savedStats);
-          } catch (e) {
-            console.error('Error parsing userStats from local storage');
+      const cloudStats = cloudData?.stats;
+      let mergedStats: UserStats = { ...DEFAULT_STATS };
+
+      if (localStats && cloudStats) {
+        mergedStats.totalXP = Math.max(localStats.totalXP || 0, cloudStats.totalXP || 0);
+        
+        // Merge history by date, preferring the one with higher XP/minutes
+        const history: Record<string, DailyStat> = {};
+        const allDates = new Set([...Object.keys(localStats.history || {}), ...Object.keys(cloudStats.history || {})]);
+        allDates.forEach(date => {
+          const lStat = (localStats?.history || {})[date];
+          const cStat = (cloudStats?.history || {})[date];
+          if (lStat && cStat) {
+            history[date] = {
+              date,
+              xp: Math.max(lStat.xp || 0, cStat.xp || 0),
+              studyMinutes: Math.max(lStat.studyMinutes || 0, cStat.studyMinutes || 0),
+              lessonsCompleted: Math.max(lStat.lessonsCompleted || 0, cStat.lessonsCompleted || 0)
+            };
+          } else {
+            history[date] = lStat || cStat;
           }
-        }
+        });
+        mergedStats.history = history;
+        mergedStats.goals = { ...DEFAULT_GOALS, ...(localStats.goals || cloudStats.goals || {}) };
+      } else if (localStats) {
+        mergedStats = { ...DEFAULT_STATS, ...localStats, goals: { ...DEFAULT_GOALS, ...(localStats.goals || {}) } };
+      } else if (cloudStats) {
+        mergedStats = { ...DEFAULT_STATS, ...cloudStats, goals: { ...DEFAULT_GOALS, ...(cloudStats.goals || {}) } };
       }
 
-      if (initialStats) {
-        const mergedStats = {
-          ...DEFAULT_STATS,
-          ...initialStats,
-          goals: { ...DEFAULT_GOALS, ...(initialStats.goals || {}) }
-        };
-        setStats(mergedStats);
-      } else {
-        setStats(DEFAULT_STATS);
-      }
+      setStats(mergedStats);
+      localStorage.setItem('userStats', JSON.stringify(mergedStats));
+      
+      // Always push the merged stats to cloud to ensure it's synced
+      syncDataToCloud({ stats: mergedStats });
+      
       setIsStatsLoaded(true);
     };
 

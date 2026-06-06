@@ -21,8 +21,15 @@ export const syncDataToCloud = async (data: any) => {
   try {
     const userRef = doc(db, "users", USER_ID);
     await setDoc(userRef, data, { merge: true });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Lỗi đồng bộ dữ liệu lên Firebase:", error);
+    if (error?.message?.includes("Missing or insufficient permissions")) {
+      // Show alert only once to prevent spam
+      if (!(window as any).hasAlertedFirebase) {
+        (window as any).hasAlertedFirebase = true;
+        alert("LỖI ĐỒNG BỘ: Firebase của bạn đã hết hạn Test Mode (30 ngày) nên chặn toàn bộ quyền ghi/đọc.\n\nVui lòng vào Firebase Console -> Firestore Database -> Rules (Quy tắc) và đổi thành:\nallow read, write: if true;");
+      }
+    }
   }
 };
 
@@ -37,6 +44,17 @@ export const loadDataFromCloud = async () => {
     console.error("Lỗi tải dữ liệu từ Firebase:", error);
   }
   return null;
+};
+
+export const subscribeToCloudData = (callback: (data: any) => void) => {
+  const userRef = doc(db, "users", USER_ID);
+  return onSnapshot(userRef, (docSnap) => {
+    if (docSnap.exists()) {
+      callback(docSnap.data());
+    }
+  }, (error) => {
+    console.error("Lỗi realtime Firebase:", error);
+  });
 };
 
 // Exam Helpers

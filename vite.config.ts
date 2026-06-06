@@ -118,10 +118,194 @@ function youtubeProxyPlugin(): Plugin {
   };
 }
 
+/**
+ * Vite plugin: TTS Proxy (Multi-Provider)
+ * 
+ * Routes TTS through the PC server for mobile clients.
+ * Fallback chain: ElevenLabs → Edge TTS → Gemini TTS
+ * 
+ * Endpoint:
+ *   POST /api/tts  { text: string, voiceName?: string }
+ *   Response:       { audio: string, format: "mp3" | "pcm" }
+ */
+function ttsProxyPlugin(config: { geminiKeys: string; elevenLabsKey: string }): Plugin {
+  const geminiKeys = config.geminiKeys.split(',').map(k => k.trim()).filter(k => k);
+  const elevenLabsKey = config.elevenLabsKey;
+
+  // ─── Provider 1: ElevenLabs (best quality, needs API key) ───
+  async function tryElevenLabs(text: string): Promise<{ audio: string; format: string } | null> {
+    if (!elevenLabsKey) return null;
+
+    try {
+      // Default multilingual voice — "Rachel" works great for French
+      const voiceId = '21m00Tcm4TlvDq8ikWAM';
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: {
+          'xi-api-key': elevenLabsKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text,
+          model_id: 'eleven_flash_v2_5',  // Fast + multilingual
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (response.status === 401) {
+        console.warn('[TTS] ElevenLabs: Invalid API key');
+        return null;
+      }
+      if (response.status === 429) {
+        console.warn('[TTS] ElevenLabs: Quota exceeded, falling back to Edge TTS');
+        return null;
+      }
+      if (!response.ok) {
+        console.warn('[TTS] ElevenLabs: HTTP', response.status);
+        return null;
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString('base64');
+      console.log(`[TTS] ✓ ElevenLabs: "${text.slice(0, 40)}..." (${Math.round(arrayBuffer.byteLength / 1024)}KB)`);
+      return { audio: base64, format: 'mp3' };
+    } catch (e: any) {
+      console.warn('[TTS] ElevenLabs failed:', e?.message?.slice(0, 80));
+      return null;
+    }
+  }
+
+  // ─── Provider 2: Edge TTS (free, fast, reliable) ───
+  async function tryEdgeTTS(text: string): Promise<{ audio: string; format: string } | null> {
+    try {
+      const { MsEdgeTTS, OUTPUT_FORMAT } = await import('msedge-tts');
+      const tts = new MsEdgeTTS();
+      await tts.setMetadata(
+        'fr-FR-VivienneMultilingualNeural',  // Excellent French neural voice
+        OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3
+      );
+
+      const { audioStream } = await tts.toStream(text);
+
+      // Collect stream into buffer with 8s timeout
+      const audioChunks: Buffer[] = [];
+      const audioPromise = new Promise<Buffer>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Edge TTS stream timeout')), 8000);
+        audioStream.on('data', (chunk: Buffer) => audioChunks.push(chunk));
+        audioStream.on('end', () => { clearTimeout(timeout); resolve(Buffer.concat(audioChunks)); });
+        audioStream.on('error', (err: Error) => { clearTimeout(timeout); reject(err); });
+      });
+
+      const audioBuffer = await audioPromise;
+      const base64 = audioBuffer.toString('base64');
+      console.log(`[TTS] ✓ Edge TTS: "${text.slice(0, 40)}..." (${Math.round(audioBuffer.length / 1024)}KB)`);
+      return { audio: base64, format: 'mp3' };
+    } catch (e: any) {
+      console.warn('[TTS] Edge TTS failed:', e?.message?.slice(0, 80));
+      return null;
+    }
+  }
+
+  // ─── Provider 3: Gemini TTS (existing fallback) ───
+  async function tryGeminiTTS(text: string, voiceName: string): Promise<{ audio: string; format: string } | null> {
+    if (geminiKeys.length === 0) return null;
+
+    try {
+      const { GoogleGenAI, Modality } = await import('@google/genai');
+      const shuffled = [...geminiKeys].sort(() => Math.random() - 0.5);
+
+      for (const key of shuffled.slice(0, 2)) {
+        try {
+          const client = new GoogleGenAI({ apiKey: key });
+          const resultPromise = client.models.generateContent({
+            model: 'gemini-2.5-flash-preview-tts',
+            contents: [{ parts: [{ text }] }],
+            config: {
+              responseModalities: [Modality.AUDIO],
+              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+            },
+          });
+          const result = await Promise.race([
+            resultPromise,
+            new Promise((_, rej) => setTimeout(() => rej(new Error('Gemini timeout')), 15000))
+          ]) as any;
+          const audio = result.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+          if (audio) {
+            console.log(`[TTS] ✓ Gemini: "${text.slice(0, 40)}..."`);
+            return { audio, format: 'pcm' };
+          }
+        } catch (e: any) {
+          console.warn('[TTS] Gemini key failed:', e?.message?.slice(0, 80));
+        }
+      }
+    } catch (e: any) {
+      console.warn('[TTS] Gemini import failed:', e?.message);
+    }
+    return null;
+  }
+
+  return {
+    name: 'tts-proxy',
+    configureServer(server) {
+      server.middlewares.use('/api/tts', async (req, res) => {
+        if (req.method !== 'POST') {
+          res.writeHead(405, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Method not allowed' }));
+          return;
+        }
+
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', async () => {
+          try {
+            const body = JSON.parse(Buffer.concat(chunks).toString());
+            const { text, voiceName = 'Kore' } = body;
+
+            if (!text) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Missing text' }));
+              return;
+            }
+
+            // Fallback chain: ElevenLabs → Edge TTS → Gemini
+            const result =
+              await tryElevenLabs(text) ||
+              await tryEdgeTTS(text) ||
+              await tryGeminiTTS(text, voiceName);
+
+            if (result) {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(result));
+            } else {
+              console.error('[TTS] All providers failed for:', text.slice(0, 50));
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'All TTS providers failed' }));
+            }
+          } catch (e: any) {
+            console.error('[TTS] Parse error:', e.message);
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid request body' }));
+          }
+        });
+      });
+    },
+  };
+}
+
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), youtubeProxyPlugin()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      basicSsl(),
+      youtubeProxyPlugin(),
+      ttsProxyPlugin({
+        geminiKeys: env.GEMINI_API_KEY || '',
+        elevenLabsKey: env.ELEVENLABS_API_KEY || '',
+      }),
+    ],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
       'process.env.GROQ_API_KEY': JSON.stringify(env.GROQ_API_KEY),
@@ -138,3 +322,4 @@ export default defineConfig(({mode}) => {
     },
   };
 });
+

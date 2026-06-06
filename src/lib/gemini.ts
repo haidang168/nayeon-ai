@@ -6,6 +6,8 @@ interface KeyStatus {
   cooldownUntil: number;
 }
 
+const IS_MOBILE = typeof navigator !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
 const apiKeys = (process.env.GEMINI_API_KEY as string || '').split(',').map(k => k.trim()).filter(k => k);
 const keys: KeyStatus[] = apiKeys.map(k => ({ key: k, cooldownUntil: 0 }));
 
@@ -88,13 +90,67 @@ export const ai = {
 } as any as GoogleGenAI;
 
 /**
- * Staggered TTS: fire 1 request immediately, if no response in 2s fire a backup.
- * Uses max 2 keys instead of 3 to save bandwidth and prevent network congestion.
+ * TTS result from any provider. Format tells the client how to decode.
+ * - 'mp3': Edge TTS / ElevenLabs → decode with AudioContext.decodeAudioData()
+ * - 'pcm': Gemini TTS → manual Int16 → Float32 conversion
+ */
+export interface TTSResult {
+  audio: string;  // base64 encoded audio data
+  format: 'mp3' | 'pcm';
+}
+
+/**
+ * TTS via server proxy — used on mobile to bypass Safari limitations.
+ * Server runs Edge TTS (fast, free) with Gemini fallback.
+ */
+async function generateTTSViaProxy(text: string, voiceName: string = 'Kore'): Promise<TTSResult | null> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voiceName }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      console.warn('[TTS Proxy] Server returned error:', res.status);
+      return null;
+    }
+
+    const data = await res.json();
+    if (!data.audio) return null;
+    return { audio: data.audio, format: data.format || 'pcm' };
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      console.warn('[TTS Proxy] Request timed out');
+    } else {
+      console.warn('[TTS Proxy] Request failed:', e?.message);
+    }
+    return null;
+  }
+}
+
+/**
+ * Main TTS entry point.
+ * - Mobile: server proxy (Edge TTS → Gemini fallback)
+ * - Desktop: direct Gemini API call with hedging
  */
 export async function generateTTSHedged(
   text: string,
   voiceName: string = 'Kore'
-): Promise<string | null> {
+): Promise<TTSResult | null> {
+  // Mobile: use server proxy
+  if (IS_MOBILE) {
+    return generateTTSViaProxy(text, voiceName);
+  }
+
+  // Desktop: direct Gemini API call (unchanged behavior)
+
   const now = Date.now();
 
   const available = [...keys]
@@ -103,9 +159,12 @@ export async function generateTTSHedged(
   const cooldown = [...keys]
     .filter(k => k.cooldownUntil >= now)
     .sort((a, b) => a.cooldownUntil - b.cooldownUntil);
+
   const selected = [...available, ...cooldown].slice(0, Math.min(keys.length, 2));
 
   if (selected.length === 0) return null;
+
+  const TIMEOUT_MS = 8000;
 
   const makeCall = (keyObj: KeyStatus) => {
     const client = new GoogleGenAI({ apiKey: keyObj.key });
@@ -118,7 +177,10 @@ export async function generateTTSHedged(
           voiceConfig: { prebuiltVoiceConfig: { voiceName } },
         },
       },
-    }).then(r => r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null)
+    }).then(r => {
+      const data = r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      return data ? { audio: data, format: 'pcm' as const } : null;
+    })
       .catch((err: any) => {
         const msg = err?.message?.toString() || '';
         if (/503|429|Overloaded|TIMEOUT|fetch failed/i.test(msg)) {
@@ -128,30 +190,30 @@ export async function generateTTSHedged(
       });
   };
 
-  // Fire first request with 8s timeout
+  // Fire first request
   const first = Promise.race([
     makeCall(selected[0]),
-    new Promise<never>((_, rej) => setTimeout(() => rej(new Error('TTS_TIMEOUT')), 8000))
+    new Promise<never>((_, rej) => setTimeout(() => rej(new Error('TTS_TIMEOUT')), TIMEOUT_MS))
   ]);
 
   if (selected.length < 2) {
     try { return await first; } catch { return null; }
   }
 
-  // Stagger: if first doesn't respond in 2s, fire backup
+  // Desktop hedging: stagger second request after 2s if first is slow
   try {
     return await Promise.race([
       first,
       new Promise<never>((_, rej) => setTimeout(() => rej(new Error('STAGGER')), 2000))
     ]);
   } catch {
-    // First is slow or failed — fire backup in parallel
     const second = Promise.race([
       makeCall(selected[1]),
-      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('TTS_TIMEOUT')), 8000))
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('TTS_TIMEOUT')), TIMEOUT_MS))
     ]);
     try {
       return await (Promise as any).any([first, second]);
     } catch { return null; }
   }
 }
+
